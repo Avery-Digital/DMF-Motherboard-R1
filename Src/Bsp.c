@@ -124,6 +124,9 @@ const ClockTree_Config sys_clk_config = {
     .ahb_hz     = 240000000UL,
     .apb1_hz    = 120000000UL,
     .apb2_hz    = 120000000UL,
+	.pll2q_hz   = 128000000UL,
+	.pll3q_hz   = 128000000UL,
+	.pll3r_hz   = 128000000UL,
 };
 
 /* ==========================================================================
@@ -132,7 +135,7 @@ const ClockTree_Config sys_clk_config = {
  *  USART10 is on APB2.
  *  Kernel clock source: PLL2Q = 128 MHz.
  *  At 128 MHz, baud = 115200 → BRR ≈ 1111 → 0.01% error.
- *  AF11 for both pins per STM32H735 datasheet Table 10.
+ *  AF4 for both pins per STM32H735 datasheet Table 10.
  * ========================================================================== */
 const USART_Config usart10_cfg = {
 
@@ -142,7 +145,7 @@ const USART_Config usart10_cfg = {
         .port       = GPIOG,
         .pin        = LL_GPIO_PIN_12,
         .mode       = LL_GPIO_MODE_ALTERNATE,
-        .af         = LL_GPIO_AF_11,
+        .af         = LL_GPIO_AF_4,
         .speed      = LL_GPIO_SPEED_FREQ_VERY_HIGH,
         .pull       = LL_GPIO_PULL_NO,
         .output     = LL_GPIO_OUTPUT_PUSHPULL,
@@ -154,7 +157,7 @@ const USART_Config usart10_cfg = {
         .port       = GPIOG,
         .pin        = LL_GPIO_PIN_11,
         .mode       = LL_GPIO_MODE_ALTERNATE,
-        .af         = LL_GPIO_AF_11,
+        .af         = LL_GPIO_AF_4,
         .speed      = LL_GPIO_SPEED_FREQ_VERY_HIGH,
         .pull       = LL_GPIO_PULL_UP,      /* Pull-up on RX to idle high   */
         .output     = LL_GPIO_OUTPUT_PUSHPULL,
@@ -163,7 +166,7 @@ const USART_Config usart10_cfg = {
     /* USART peripheral */
     .peripheral         = USART10,
     .bus_clk_enable     = LL_APB2_GRP1_PERIPH_USART10,
-    .kernel_clk_source  = LL_RCC_USART16_CLKSOURCE_PLL2Q,
+    .kernel_clk_source  = LL_RCC_USART16910_CLKSOURCE_PLL2Q,
     .prescaler          = LL_USART_PRESCALER_DIV1,
     .baudrate           = 115200U,
     .data_width         = LL_USART_DATAWIDTH_8B,
@@ -172,6 +175,10 @@ const USART_Config usart10_cfg = {
     .direction          = LL_USART_DIRECTION_TX_RX,
     .hw_flow_control    = LL_USART_HWCONTROL_NONE,
     .oversampling       = LL_USART_OVERSAMPLING_16,
+
+	.kernel_clk_hz      = 128000000UL,     /* PLL2Q */
+
+
 
     /* NVIC */
     .irqn               = USART10_IRQn,
@@ -308,6 +315,39 @@ I2C_Handle i2c1_handle = {
     .cfg    = &i2c1_cfg,
     .busy   = false,
     .error  = 0U,
+};
+
+/* ==========================================================================
+ *  USB2517I STRAPPING PINS
+ *
+ *  CFG_SEL1 (PG1, Pin 66) and CFG_SEL2 (PG0, Pin 63) must be driven
+ *  LOW before the hub exits reset to select SMBus configuration mode.
+ *
+ *  CFG_SEL[2:1:0] = 0,0,1 → SMBus slave mode
+ *    CFG_SEL0 = SCL line (idles high via pull-up) = 1
+ *    CFG_SEL1 = PG1 driven low = 0
+ *    CFG_SEL2 = PG0 driven low = 0
+ * ========================================================================== */
+const PinConfig usb2517_cfg_sel1_pin = {
+    .clk        = LL_AHB4_GRP1_PERIPH_GPIOG,
+    .port       = GPIOG,
+    .pin        = LL_GPIO_PIN_1,
+    .mode       = LL_GPIO_MODE_OUTPUT,
+    .af         = 0U,
+    .speed      = LL_GPIO_SPEED_FREQ_LOW,
+    .pull       = LL_GPIO_PULL_NO,
+    .output     = LL_GPIO_OUTPUT_PUSHPULL,
+};
+
+const PinConfig usb2517_cfg_sel2_pin = {
+    .clk        = LL_AHB4_GRP1_PERIPH_GPIOG,
+    .port       = GPIOG,
+    .pin        = LL_GPIO_PIN_0,
+    .mode       = LL_GPIO_MODE_OUTPUT,
+    .af         = 0U,
+    .speed      = LL_GPIO_SPEED_FREQ_LOW,
+    .pull       = LL_GPIO_PULL_NO,
+    .output     = LL_GPIO_OUTPUT_PUSHPULL,
 };
 
 /* ==========================================================================

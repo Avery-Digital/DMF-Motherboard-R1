@@ -68,18 +68,23 @@ static void SystemInit_Sequence(void)
      *         PLL2 (128 MHz USART kernel), PLL3 (128 MHz SPI/I2C) */
     ClockTree_Init(&sys_clk_config);
 
-    /* Step 3: I2C1 on PB7 (SDA) / PB8 (SCL) */
+    /* Step 3: Assert USB2517 strapping pins ASAP.
+     *         CFG_SEL1 and CFG_SEL2 must be low before the hub exits
+     *         power-on reset so it enters SMBus configuration mode. */
+    //USB2517_SetStrapPins();
+
+    /* Step 4: I2C1 on PB7 (SDA) / PB8 (SCL) */
     result = I2C_Driver_Init(&i2c1_handle);
     if (result != INIT_OK) {
         Error_Handler();
     }
 
-    /* Step 4: USB2517I hub — write config registers and attach to USB host.
+    /* Step 5: USB2517I hub — write config registers and attach to USB host.
      *         Must complete before the FT231 COM port will enumerate. */
-    result = USB2517_Init(&i2c1_handle);
-    if (result != INIT_OK) {
-        Error_Handler();
-    }
+//    result = USB2517_Init(&i2c1_handle);
+//    if (result != INIT_OK) {
+//        Error_Handler();
+//    }
 
     /* Step 5: Protocol parser — register the packet callback */
     Protocol_ParserInit(&usart10_parser, OnPacketReceived, NULL);

@@ -93,15 +93,45 @@ static InitResult USB2517_WriteReg(I2C_Handle *i2c, uint8_t reg, uint8_t val)
 }
 
 /* ==========================================================================
+ *  USB2517_SetStrapPins
+ *
+ *  Drives CFG_SEL1 (PG1) and CFG_SEL2 (PG0) low to select SMBus
+ *  configuration mode.  CFG_SEL0 is the SCL line which idles high
+ *  via pull-ups, giving CFG_SEL[2:1:0] = 0,0,1 = SMBus mode.
+ *
+ *  Call this as early as possible in the boot sequence — ideally
+ *  before or immediately after the hub exits power-on reset.
+ * ========================================================================== */
+void USB2517_SetStrapPins(void)
+{
+    /* Initialise pins as push-pull outputs */
+    Pin_Init(&usb2517_cfg_sel1_pin);
+    Pin_Init(&usb2517_cfg_sel2_pin);
+
+    /* Drive both low: CFG_SEL1 = 0, CFG_SEL2 = 0 */
+    LL_GPIO_ResetOutputPin(usb2517_cfg_sel1_pin.port, usb2517_cfg_sel1_pin.pin);
+    LL_GPIO_ResetOutputPin(usb2517_cfg_sel2_pin.port, usb2517_cfg_sel2_pin.pin);
+}
+
+/* ==========================================================================
  *  USB2517_Init
  *
- *  Writes all default configuration registers, then sends USB_ATTACH.
- *  After USB_ATTACH, the hub connects to the upstream USB host and
- *  downstream devices (FT231, etc.) become visible to the PC.
+ *  Asserts strapping pins, writes all default configuration registers,
+ *  then sends USB_ATTACH.  After USB_ATTACH, the hub connects to the
+ *  upstream USB host and downstream devices (FT231, etc.) become
+ *  visible to the PC.
  * ========================================================================== */
 InitResult USB2517_Init(I2C_Handle *i2c)
 {
     InitResult result;
+
+    /* Assert strapping pins for SMBus mode */
+    USB2517_SetStrapPins();
+
+    /* Allow hub time to sample strapping pins after reset.
+     * The hub needs to see stable levels on CFG_SEL pins
+     * when RESET_N is released. */
+    for (volatile uint32_t d = 0; d < 100000; d++) { __NOP(); }
 
     /* Write all configuration registers */
     for (uint32_t i = 0; i < USB2517_NUM_DEFAULTS; i++) {

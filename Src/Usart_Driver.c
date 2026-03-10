@@ -86,7 +86,7 @@ InitResult USART_Driver_Init(USART_Handle *handle, ProtocolParser *parser)
 
     LL_USART_SetPrescaler(cfg->peripheral, cfg->prescaler);
     LL_USART_SetBaudRate(cfg->peripheral,
-                         sys_clk_config.apb2_hz,
+                         sys_clk_config.pll2q_hz,
                          cfg->prescaler,
                          cfg->oversampling,
                          cfg->baudrate);

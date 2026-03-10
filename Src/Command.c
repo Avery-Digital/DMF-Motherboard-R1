@@ -60,7 +60,7 @@ void Command_Dispatch(USART_Handle *handle,
 }
 
 /* ==========================================================================
- *  CMD_PING (0xBEEF)
+ *  CMD_PING (0xDEAD)
  *
  *  Responds with a hardcoded test payload for manual testing.
  *  Edit the test_payload array to send whatever data you need

@@ -139,6 +139,9 @@ typedef struct {
     uint32_t            ahb_hz;            /**< Expected AHB clock           */
     uint32_t            apb1_hz;           /**< Expected APB1 clock          */
     uint32_t            apb2_hz;           /**< Expected APB2 clock          */
+    uint32_t 			pll2q_hz;   /* add */
+    uint32_t 			pll3q_hz;   /* add */
+    uint32_t 			pll3r_hz;   /* add */
 } ClockTree_Config;
 
 /* ========================== USART Configuration =========================== */
@@ -166,7 +169,7 @@ typedef struct {
     uint32_t            direction;          /**< LL_USART_DIRECTION_x        */
     uint32_t            hw_flow_control;    /**< LL_USART_HWCONTROL_x        */
     uint32_t            oversampling;       /**< LL_USART_OVERSAMPLING_x     */
-
+    uint32_t			kernel_clk_hz;
     /* Interrupt */
     IRQn_Type           irqn;
     uint32_t            irq_priority;
@@ -312,6 +315,10 @@ extern USART_Handle             usart10_handle;
 /* I2C1 on PB8 (SCL) / PB7 (SDA) */
 extern const I2C_Config         i2c1_cfg;
 extern I2C_Handle               i2c1_handle;
+
+/* USB2517I strapping pins */
+extern const PinConfig          usb2517_cfg_sel1_pin;   /* PG1 — Pin 66 */
+extern const PinConfig          usb2517_cfg_sel2_pin;   /* PG0 — Pin 63 */
 
 #ifdef __cplusplus
 }

@@ -46,6 +46,13 @@ extern "C" {
 /* ========================== Public API ==================================== */
 
 /**
+ * @brief  Assert CFG_SEL strapping pins for SMBus mode.
+ *         Call this as early as possible — ideally before USB2517 exits
+ *         power-on reset.  Drives CFG_SEL1 and CFG_SEL2 low.
+ */
+void USB2517_SetStrapPins(void);
+
+/**
  * @brief  Initialise the USB2517I hub via I2C.
  *
  *         Writes default configuration registers and sends the USB_ATTACH
