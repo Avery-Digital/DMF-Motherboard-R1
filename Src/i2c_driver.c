@@ -13,6 +13,7 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "i2c_driver.h"
+#include "ll_tick.h"
 
 /* ==========================================================================
  *  PRIVATE HELPERS
@@ -24,24 +25,7 @@
  */
 static bool I2C_Timeout(uint32_t start_tick, uint32_t timeout_ms)
 {
-    /* LL_GetTick() returns the SysTick-based ms counter set up by
-     * LL_Init1msTick() in ClockTree_Init(). */
     return ((LL_GetTick() - start_tick) > timeout_ms);
-}
-
-/**
- * @brief  Wait for a flag to be set, with timeout.
- * @return true if flag was set, false if timeout expired.
- */
-static bool I2C_WaitFlag(I2C_TypeDef *i2c, uint32_t flag, uint32_t timeout_ms)
-{
-    uint32_t start = LL_GetTick();
-    while (!LL_I2C_IsActiveFlag(i2c, flag)) {
-        if (I2C_Timeout(start, timeout_ms)) {
-            return false;
-        }
-    }
-    return true;
 }
 
 /**

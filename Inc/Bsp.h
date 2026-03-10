@@ -234,6 +234,9 @@ typedef struct {
     uint8_t                   *rx_buf;
     uint16_t                   rx_buf_size;
 
+    /* Protocol parser — assigned at init, used by ISR to feed bytes */
+    void                      *parser;       /**< ProtocolParser* (void* to avoid circular include) */
+
     /* Transfer state */
     volatile uint16_t          tx_len;       /**< Bytes queued for current TX */
     volatile bool              tx_busy;      /**< TX DMA transfer in progress */

@@ -13,6 +13,7 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "bsp.h"
+#include <stddef.h>
 
 /* ==========================================================================
  *  DMA BUFFERS — D2 SRAM PLACEMENT
@@ -240,6 +241,7 @@ USART_Handle usart10_handle = {
     .tx_buf_size    = USART10_TX_BUF_SIZE,
     .rx_buf         = usart10_rx_dma_buf,
     .rx_buf_size    = USART10_RX_BUF_SIZE,
+    .parser         = NULL,     /* Assigned at runtime in main.c */
     .tx_len         = 0U,
     .tx_busy        = false,
     .rx_head        = 0U,

@@ -9,9 +9,19 @@
  * Initialization sequence:
  *   1. MCU_Init()            — MPU, SYSCFG, NVIC, flash latency, power
  *   2. ClockTree_Init()      — HSE, PLL1/2/3, bus prescalers
- *   3. Protocol_ParserInit() — Frame parser state machine
- *   4. USART_Driver_Init()   — GPIO, USART10, DMA streams
- *   5. USART_Driver_StartRx()— Enable circular DMA reception
+ *   3. I2C_Driver_Init()     — I2C1 on PB7/PB8, 400 kHz
+ *   4. USB2517_Init()        — Configure USB hub, send USB_ATTACH
+ *   5. Protocol_ParserInit() — Frame parser state machine
+ *   6. USART_Driver_Init()   — GPIO, USART10, DMA streams (interrupt-driven)
+ *   7. USART_Driver_StartRx()— Enable DMA HT/TC + USART IDLE interrupts
+ *
+ * Runtime:
+ *   All UART reception is interrupt-driven.  The main loop is free for
+ *   other tasks (ADC polling, LED updates, watchdog refresh, sleep).
+ *
+ *   IMPORTANT: OnPacketReceived() is called from ISR context (DMA or
+ *   USART IDLE interrupt).  Keep command handlers short, or set a flag
+ *   and defer heavy processing to the main loop.
  ******************************************************************************/
 
 /* Includes ------------------------------------------------------------------*/
@@ -33,13 +43,14 @@ int main(void)
     /* Initialize MCU and peripherals */
     SystemInit_Sequence();
 
-    /* Main loop */
+    /* Main loop — UART is fully interrupt-driven, no polling needed.
+     * Add other non-interrupt tasks here as the project grows. */
     while (1)
     {
-        /* Poll DMA for new bytes → feeds into protocol parser.
-         * When a complete, CRC-valid packet arrives, OnPacketReceived()
-         * is called automatically by the parser. */
-        USART_Driver_PollRx(&usart10_handle, &usart10_parser);
+        /* TODO: Watchdog refresh */
+        /* TODO: Status LED update */
+        /* TODO: ADC polling */
+        /* TODO: Low-power sleep (WFI) if desired */
     }
 }
 
@@ -73,13 +84,14 @@ static void SystemInit_Sequence(void)
     /* Step 5: Protocol parser — register the packet callback */
     Protocol_ParserInit(&usart10_parser, OnPacketReceived, NULL);
 
-    /* Step 6: USART10 + DMA on PG11 (RX) / PG12 (TX) */
-    result = USART_Driver_Init(&usart10_handle);
+    /* Step 6: USART10 + DMA on PG11 (RX) / PG12 (TX)
+     *         Parser is passed to the driver so ISRs can feed it directly */
+    result = USART_Driver_Init(&usart10_handle, &usart10_parser);
     if (result != INIT_OK) {
         Error_Handler();
     }
 
-    /* Step 7: Start circular DMA reception */
+    /* Step 7: Start interrupt-driven DMA reception */
     USART_Driver_StartRx(&usart10_handle);
 }
 
@@ -87,17 +99,17 @@ static void SystemInit_Sequence(void)
  *  PACKET RECEIVED CALLBACK
  *
  *  Called by the protocol parser when a complete, CRC-validated packet
- *  arrives.  This is where you dispatch based on msg1/msg2 to your
- *  application handlers.
+ *  arrives.
  *
- *  NOTE: This is called from the main loop context (inside PollRx),
- *  not from an interrupt, so it's safe to do substantial processing here.
+ *  WARNING: This runs in ISR context (from DMA HT/TC or USART IDLE
+ *  interrupt).  Keep command handlers fast.  If a command requires
+ *  significant processing, set a flag here and handle it in the main loop.
  * ========================================================================== */
 static void OnPacketReceived(const PacketHeader *header,
                              const uint8_t *payload,
                              void *ctx)
 {
-    (void)ctx;  /* Unused for now */
+    (void)ctx;
 
     /* Route to command handler based on cmd1 + cmd2 */
     Command_Dispatch(&usart10_handle, header, payload);
