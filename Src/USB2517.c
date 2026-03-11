@@ -110,7 +110,7 @@ void USB2517_SetStrapPins(void)
 
     /* Drive both low: CFG_SEL1 = 0, CFG_SEL2 = 0 */
     LL_GPIO_ResetOutputPin(usb2517_cfg_sel1_pin.port, usb2517_cfg_sel1_pin.pin);
-    LL_GPIO_ResetOutputPin(usb2517_cfg_sel2_pin.port, usb2517_cfg_sel2_pin.pin);
+    LL_GPIO_SetOutputPin(usb2517_cfg_sel2_pin.port, usb2517_cfg_sel2_pin.pin);
 }
 
 /* ==========================================================================

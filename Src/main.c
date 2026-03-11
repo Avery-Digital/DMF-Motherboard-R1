@@ -71,7 +71,7 @@ static void SystemInit_Sequence(void)
     /* Step 3: Assert USB2517 strapping pins ASAP.
      *         CFG_SEL1 and CFG_SEL2 must be low before the hub exits
      *         power-on reset so it enters SMBus configuration mode. */
-    //USB2517_SetStrapPins();
+    USB2517_SetStrapPins();
 
     /* Step 4: I2C1 on PB7 (SDA) / PB8 (SCL) */
     result = I2C_Driver_Init(&i2c1_handle);
