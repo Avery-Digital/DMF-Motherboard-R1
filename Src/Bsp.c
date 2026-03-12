@@ -318,6 +318,111 @@ I2C_Handle i2c1_handle = {
 };
 
 /* ==========================================================================
+ *  SPI2 CONFIGURATION  —  LTC2338-18 18-bit ADC
+ *
+ *  MISO : PC2_C, Pin 36    AF5
+ *  MOSI : PC3_C, Pin 37    AF5  — unused by LTC2338-18 in normal mode
+ *  SCK  : PA9,   Pin 128   AF5
+ *  CNV  : PE12,  Pin 74    GPIO output — conversion trigger (active HIGH pulse)
+ *  BUSY : PE15,  Pin 77    GPIO input  — open-drain, LOW when conversion complete
+ *
+ *  SPI2 is on APB1.  Kernel clock source: PLL3Q = 128 MHz.
+ *  Mode 0 (CPOL=0, CPHA=0): clock idles LOW, data sampled on rising edge.
+ *  Baud: PLL3Q / DIV128 = 128 MHz / 128 = 1.0 MHz SCK.
+ *
+ *  NOTE: PC2_C / PC3_C are the analog-side "C" variants of those pins on
+ *  the H735IGT6.  Confirm AF5 is reachable on those balls in your package.
+ * ========================================================================== */
+const SPI_Config spi2_cfg = {
+
+    /* MISO — PC2_C, Pin 36 */
+    .miso_pin = {
+        .clk        = LL_AHB4_GRP1_PERIPH_GPIOC,
+        .port       = GPIOC,
+        .pin        = LL_GPIO_PIN_2,
+        .mode       = LL_GPIO_MODE_ALTERNATE,
+        .af         = LL_GPIO_AF_5,
+        .speed      = LL_GPIO_SPEED_FREQ_HIGH,
+        .pull       = LL_GPIO_PULL_NO,
+        .output     = LL_GPIO_OUTPUT_PUSHPULL,
+    },
+
+    /* MOSI — PC3_C, Pin 37 (not driven by LTC2338-18 in normal mode) */
+    .mosi_pin = {
+        .clk        = LL_AHB4_GRP1_PERIPH_GPIOC,
+        .port       = GPIOC,
+        .pin        = LL_GPIO_PIN_3,
+        .mode       = LL_GPIO_MODE_ALTERNATE,
+        .af         = LL_GPIO_AF_5,
+        .speed      = LL_GPIO_SPEED_FREQ_HIGH,
+        .pull       = LL_GPIO_PULL_NO,
+        .output     = LL_GPIO_OUTPUT_PUSHPULL,
+    },
+
+    /* SCK — PA9, Pin 128 */
+    .sck_pin = {
+        .clk        = LL_AHB4_GRP1_PERIPH_GPIOA,
+        .port       = GPIOA,
+        .pin        = LL_GPIO_PIN_9,
+        .mode       = LL_GPIO_MODE_ALTERNATE,
+        .af         = LL_GPIO_AF_5,
+        .speed      = LL_GPIO_SPEED_FREQ_HIGH,
+        .pull       = LL_GPIO_PULL_NO,
+        .output     = LL_GPIO_OUTPUT_PUSHPULL,
+    },
+
+    /* CNV — PE12, Pin 74 */
+    .cnv_pin = {
+        .clk        = LL_AHB4_GRP1_PERIPH_GPIOE,
+        .port       = GPIOE,
+        .pin        = LL_GPIO_PIN_12,
+        .mode       = LL_GPIO_MODE_OUTPUT,
+        .af         = 0U,
+        .speed      = LL_GPIO_SPEED_FREQ_HIGH,  /* Fast edge needed for t_CNVH */
+        .pull       = LL_GPIO_PULL_NO,
+        .output     = LL_GPIO_OUTPUT_PUSHPULL,
+    },
+
+    /* BUSY — PE15, Pin 77 */
+    .busy_pin = {
+        .clk        = LL_AHB4_GRP1_PERIPH_GPIOE,
+        .port       = GPIOE,
+        .pin        = LL_GPIO_PIN_15,
+        .mode       = LL_GPIO_MODE_INPUT,
+        .af         = 0U,
+        .speed      = LL_GPIO_SPEED_FREQ_LOW,
+        .pull       = LL_GPIO_PULL_UP,          /* BUSY is open-drain; pull-up to idle HIGH */
+        .output     = LL_GPIO_OUTPUT_PUSHPULL,  /* N/A for input, set to default            */
+    },
+
+    /* SPI2 peripheral */
+    .peripheral         = SPI2,
+    .bus_clk_enable     = LL_APB1_GRP1_PERIPH_SPI2,
+
+    /* Mode 0: CPOL=0 (clock idles LOW), CPHA=0 (sample on rising edge) */
+    .clk_polarity       = LL_SPI_POLARITY_LOW,
+    .clk_phase          = LL_SPI_PHASE_1EDGE,
+    .bit_order          = LL_SPI_MSB_FIRST,
+    .data_width         = LL_SPI_DATAWIDTH_32BIT,
+    .nss_mode           = LL_SPI_NSS_SOFT,
+
+	/* 128 MHz / 8 = 16 MHz SCK */
+	.baud_prescaler     = LL_SPI_BAUDRATEPRESCALER_DIV8,
+
+    /* Timeouts — LTC2338-18 converts in ~1 µs; 5 ms is very conservative */
+    .busy_timeout_ms    = 5U,
+    .xfer_timeout_ms    = 5U,
+};
+
+/* SPI2 runtime handle */
+SPI_Handle spi2_handle = {
+    .cfg         = &spi2_cfg,
+    .initialised = false,
+    .busy        = false,
+    .error       = 0U,
+};
+
+/* ==========================================================================
  *  USB2517I STRAPPING PINS
  *
  *  CFG_SEL1 (PG1, Pin 66) and CFG_SEL2 (PG0, Pin 63) must be driven

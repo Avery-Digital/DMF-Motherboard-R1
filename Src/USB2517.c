@@ -104,7 +104,7 @@ static InitResult USB2517_WriteReg(I2C_Handle *i2c, uint8_t reg, uint8_t val)
  * ========================================================================== */
 void USB2517_SetStrapPins(void)
 {
-    /* Initialise pins as push-pull outputs */
+    /* Initialize pins as push-pull outputs */
     Pin_Init(&usb2517_cfg_sel1_pin);
     Pin_Init(&usb2517_cfg_sel2_pin);
 

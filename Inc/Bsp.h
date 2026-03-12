@@ -29,6 +29,7 @@ extern "C" {
 #include "stm32h7xx_ll_pwr.h"
 #include "stm32h7xx_ll_rcc.h"
 #include "stm32h7xx_ll_system.h"
+#include "stm32h7xx_ll_spi.h"
 #include "stm32h7xx_ll_usart.h"
 #include "stm32h7xx_ll_utils.h"
 
@@ -249,6 +250,57 @@ typedef struct {
     uint16_t                   crc_accumulator;
 } USART_Handle;
 
+/* =========================== SPI Configuration ============================ */
+
+/**
+ * @brief Complete SPI peripheral configuration.
+ *
+ * Includes GPIO pin configs for MISO, MOSI, SCK, and device-specific
+ * control/status pins (CNV, BUSY) for the LTC2338-18 ADC.
+ * Immutable — const-qualified in bsp.c.
+ */
+typedef struct {
+    /* Bus signal pins */
+    PinConfig           miso_pin;
+    PinConfig           mosi_pin;
+    PinConfig           sck_pin;
+
+    /* LTC2338-18 control / status pins */
+    PinConfig           cnv_pin;            /**< Conversion trigger — active HIGH pulse */
+    PinConfig           busy_pin;           /**< Conversion complete — LOW when ready   */
+
+    /* Peripheral */
+    SPI_TypeDef        *peripheral;         /**< SPIx base address                      */
+    uint32_t            bus_clk_enable;     /**< LL_APB1_GRP1_PERIPH_SPIx              */
+
+    /* Protocol */
+    uint32_t            clk_polarity;       /**< LL_SPI_POLARITY_LOW/HIGH              */
+    uint32_t            clk_phase;          /**< LL_SPI_PHASE_1EDGE/2EDGE              */
+    uint32_t            bit_order;          /**< LL_SPI_MSB_FIRST / LSB_FIRST          */
+    uint32_t            data_width;         /**< LL_SPI_DATAWIDTH_32BIT                */
+    uint32_t            nss_mode;           /**< LL_SPI_NSS_SOFT                       */
+    uint32_t            baud_prescaler;     /**< LL_SPI_BAUDRATEPRESCALER_DIVx         */
+
+    /* Timeouts (millisecond tick counts) */
+    uint32_t            busy_timeout_ms;    /**< Max wait for BUSY to assert           */
+    uint32_t            xfer_timeout_ms;    /**< Max wait for TXC/RXP flags            */
+} SPI_Config;
+
+/**
+ * @brief Mutable runtime state for an SPI peripheral.
+ *
+ * The const config pointer lives in flash.  The runtime fields track
+ * transfer state for polled operation.
+ */
+typedef struct {
+    const SPI_Config   *cfg;
+
+    /* Transfer state */
+    bool                initialised;
+    volatile bool       busy;
+    volatile uint32_t   error;              /**< Last error flags                       */
+} SPI_Handle;
+
 /* =========================== I2C Configuration ============================ */
 
 /**
@@ -311,6 +363,12 @@ extern const DMA_ChannelConfig  usart10_dma_rx_cfg;
 
 /* USART10 runtime handle */
 extern USART_Handle             usart10_handle;
+
+/* SPI2 — LTC2338-18 18-bit ADC
+ *   MISO : PC2_C (Pin 36)   MOSI : PC3_C (Pin 37)   SCK : PA9 (Pin 128)
+ *   CNV  : PE12  (Pin 74)   BUSY : PE15  (Pin 77)                        */
+extern const SPI_Config         spi2_cfg;
+extern SPI_Handle               spi2_handle;
 
 /* I2C1 on PB8 (SCL) / PB7 (SDA) */
 extern const I2C_Config         i2c1_cfg;
