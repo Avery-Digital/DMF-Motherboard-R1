@@ -18,12 +18,18 @@
 /* Includes ------------------------------------------------------------------*/
 #include "command.h"
 #include "main.h"
+#include "spi_driver.h"
+#include "bsp.h"
 #include <string.h>
 
 /* Private handler prototypes ------------------------------------------------*/
 static void Command_HandlePing(USART_Handle *handle,
                                const PacketHeader *header,
                                const uint8_t *payload);
+
+static void Command_HandleReadADC(USART_Handle *handle,
+                                  const PacketHeader *header,
+                                  const uint8_t *payload);
 
 /* ==========================================================================
  *  COMMAND DISPATCH
@@ -44,14 +50,14 @@ void Command_Dispatch(USART_Handle *handle,
         Command_HandlePing(handle, header, payload);
         break;
 
+    case CMD_READ_ADC:
+        Command_HandleReadADC(handle, header, payload);
+        break;
+
     /* ---- Add new command cases here ---- */
     /*
     case CMD_SET_VOLTAGE:
         Command_HandleSetVoltage(handle, header, payload);
-        break;
-
-    case CMD_READ_ADC:
-        Command_HandleReadADC(handle, header, payload);
         break;
     */
 
@@ -90,5 +96,62 @@ static void Command_HandlePing(USART_Handle *handle,
     tx_request.cmd2    = header->cmd2;
     memcpy(tx_request.payload, test_payload, sizeof(test_payload));
     tx_request.length  = sizeof(test_payload);
+    tx_request.pending = true;  /* Must be last — acts as the commit */
+}
+
+/* ==========================================================================
+ *  CMD_READ_ADC (0x0C01)
+ *
+ *  Triggers a single conversion on the LTC2338-18 via SPI2 and returns
+ *  the raw 18-bit result in the response payload as a 4-byte little-endian
+ *  unsigned integer.
+ *
+ *  Response payload layout (4 bytes):
+ *    Byte 0 — bits [7:0]   (LSB)
+ *    Byte 1 — bits [15:8]
+ *    Byte 2 — bits [17:16]
+ *    Byte 3 — 0x00         (reserved, always zero)
+ *
+ *  On SPI error, all four payload bytes are set to 0xFF as a sentinel
+ *  so the host can distinguish a failed read from a valid zero result.
+ *
+ *  NOTE: Runs in ISR context — SPI_LTC2338_Read uses polling with timeout
+ *  which is acceptable here given the short conversion time (~1 µs) and
+ *  the 16 MHz SCK giving a 2 µs transfer window.  Move to a deferred task
+ *  if tighter ISR latency budgets are required in future.
+ * ========================================================================== */
+static void Command_HandleReadADC(USART_Handle *handle,
+                                  const PacketHeader *header,
+                                  const uint8_t *payload)
+{
+    (void)handle;
+    (void)payload;
+
+    uint32_t adc_result = 0U;
+    uint8_t  response[4];
+
+    SPI_Status status = SPI_LTC2338_Read(&spi2_handle, &adc_result);
+
+    if (status == SPI_OK) {
+        /* Pack 18-bit result as 4-byte little-endian */
+        response[0] = (uint8_t)( adc_result        & 0xFFU);
+        response[1] = (uint8_t)((adc_result >>  8U) & 0xFFU);
+        response[2] = (uint8_t)((adc_result >> 16U) & 0x03U);  /* Only bits [17:16] valid */
+        response[3] = 0x00U;
+    } else {
+        /* Sentinel — all 0xFF signals a failed read to the host */
+        response[0] = 0xFFU;
+        response[1] = 0xFFU;
+        response[2] = 0xFFU;
+        response[3] = 0xFFU;
+    }
+
+    /* Never call SendPacket from ISR — set flag for main loop */
+    tx_request.msg1    = header->msg1;
+    tx_request.msg2    = header->msg2;
+    tx_request.cmd1    = header->cmd1;
+    tx_request.cmd2    = header->cmd2;
+    memcpy(tx_request.payload, response, sizeof(response));
+    tx_request.length  = sizeof(response);
     tx_request.pending = true;  /* Must be last — acts as the commit */
 }

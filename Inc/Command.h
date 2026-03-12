@@ -35,13 +35,13 @@ extern "C" {
 
 /* ========================= Command Definitions ============================ */
 
-#define CMD_PING            CMD_CODE(0xDE, 0xAD)    /**< Ping / echo test   */
+#define CMD_PING            CMD_CODE(0xDE, 0xAD)    /**< Ping / echo test        */
+#define CMD_READ_ADC        CMD_CODE(0x0C, 0x01)    /**< Read LTC2338-18 ADC     */
 
 
 /* Add new commands here as you build out the protocol:
  *
  * #define CMD_SET_VOLTAGE     CMD_CODE(0x10, 0x01)
- * #define CMD_READ_ADC        CMD_CODE(0x10, 0x02)
  * #define CMD_RESET           CMD_CODE(0xFF, 0x00)
  */
 
