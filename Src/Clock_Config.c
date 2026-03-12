@@ -18,6 +18,24 @@
  * ========================================================================== */
 void MCU_Init(void)
 {
+	/* Check if last reset was caused by WWDG */
+	if (LL_RCC_IsActiveFlag_WWDG1RST())
+	{
+		LL_RCC_ClearResetFlags();
+		/* Put a breakpoint on the next line to confirm */
+		__NOP();
+	}
+	/* Disable WWDG early wakeup interrupt if hardware watchdog is running */
+	NVIC_DisableIRQ(WWDG_IRQn);
+
+	/* Force-clear all DMA1 interrupt flags from previous session */
+	DMA1->LIFCR = 0xFFFFFFFF;  /* Clears streams 0-3 flags */
+	DMA1->HIFCR = 0xFFFFFFFF;  /* Clears streams 4-7 flags (Stream 5 is here) */
+	DMA2->LIFCR = 0xFFFFFFFF;
+	DMA2->HIFCR = 0xFFFFFFFF;
+
+	/* Disable all DMA1 streams */
+	DMA1_Stream5->CR &= ~DMA_SxCR_EN;
     /* ---- MPU: Background region, deny all unprivileged access ---- */
     LL_MPU_Disable();
     LL_MPU_ConfigRegion(

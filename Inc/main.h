@@ -20,7 +20,18 @@ extern "C" {
 #include "i2c_driver.h"
 #include "usart_driver.h"
 #include "usb2517.h"
+#include <stdint.h>
+#include <stdbool.h>
+#include "packet_protocol.h"
 
+typedef struct {
+    volatile bool   pending;
+    uint8_t         msg1, msg2, cmd1, cmd2;
+    uint8_t         payload[PKT_MAX_PAYLOAD];
+    uint16_t        length;
+} TxRequest;
+
+extern TxRequest tx_request;
 /* Exported functions --------------------------------------------------------*/
 void Error_Handler(void);
 

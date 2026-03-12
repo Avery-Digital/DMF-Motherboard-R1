@@ -17,6 +17,8 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "command.h"
+#include "main.h"
+#include <string.h>
 
 /* Private handler prototypes ------------------------------------------------*/
 static void Command_HandlePing(USART_Handle *handle,
@@ -65,20 +67,28 @@ void Command_Dispatch(USART_Handle *handle,
  *  Responds with a hardcoded test payload for manual testing.
  *  Edit the test_payload array to send whatever data you need
  *  during bring-up and debugging.
+ *
+ *  NOTE: Never call USART_Driver_SendPacket() directly from a command
+ *  handler — this runs in ISR context.  Always set tx_request and let
+ *  the main loop perform the actual DMA transfer.
  * ========================================================================== */
 static void Command_HandlePing(USART_Handle *handle,
                                const PacketHeader *header,
                                const uint8_t *payload)
 {
-    (void)payload;  /* Not using the received payload for now */
+    (void)handle;
+    (void)payload;
 
-    /* ---- Edit this array to test different responses ---- */
     static const uint8_t test_payload[] = {
         0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03, 0x04
     };
 
-    USART_Driver_SendPacket(handle,
-                            header->msg1, header->msg2,
-                            header->cmd1, header->cmd2,
-                            test_payload, sizeof(test_payload));
+    /* Never call SendPacket from ISR — set flag for main loop */
+    tx_request.msg1    = header->msg1;
+    tx_request.msg2    = header->msg2;
+    tx_request.cmd1    = header->cmd1;
+    tx_request.cmd2    = header->cmd2;
+    memcpy(tx_request.payload, test_payload, sizeof(test_payload));
+    tx_request.length  = sizeof(test_payload);
+    tx_request.pending = true;  /* Must be last — acts as the commit */
 }

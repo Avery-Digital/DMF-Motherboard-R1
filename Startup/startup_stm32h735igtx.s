@@ -113,6 +113,7 @@ LoopForever:
 */
   .section .text.Default_Handler,"ax",%progbits
 Default_Handler:
+    b Unhandled_IRQ_Handler
 Infinite_Loop:
   b Infinite_Loop
   .size Default_Handler, .-Default_Handler

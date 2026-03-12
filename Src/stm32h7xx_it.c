@@ -28,21 +28,37 @@ void SysTick_Handler(void)
     LL_IncTick();
 }
 
+void HardFault_Handler(void)
+{
+    volatile uint32_t active_irq = SCB->ICSR & 0x1FFU;  /* Current IRQ number */
+    volatile uint32_t hfsr = SCB->HFSR;                  /* HardFault status   */
+    volatile uint32_t cfsr = SCB->CFSR;                  /* Configurable fault  */
+    (void)active_irq;
+    (void)hfsr;
+    (void)cfsr;
+    while (1);  /* Set breakpoint here */
+}
+
+void Unhandled_IRQ_Handler(void)
+{
+    volatile uint32_t active_irq = SCB->ICSR & 0x1FFU;
+    (void)active_irq;
+    while (1);  /* Breakpoint here — read active_irq in Variables view */
+}
+
 /* ==========================================================================
  *  DMA1 STREAM 0 — USART10 TX COMPLETE
  *
  *  Fires when the DMA has finished sending all bytes from the TX buffer.
  *  Clears the tx_busy flag so the next packet can be queued.
  * ========================================================================== */
-void DMA1_Stream0_IRQHandler(void)
+/* Was: DMA1_Stream0_IRQHandler */
+void DMA_STR0_IRQHandler(void)
 {
-    /* Transfer Complete */
     if (LL_DMA_IsActiveFlag_TC0(DMA1)) {
         LL_DMA_ClearFlag_TC0(DMA1);
         USART_Driver_TxCompleteISR(&usart10_handle);
     }
-
-    /* Transfer Error */
     if (LL_DMA_IsActiveFlag_TE0(DMA1)) {
         LL_DMA_ClearFlag_TE0(DMA1);
         USART_Driver_TxCompleteISR(&usart10_handle);
@@ -56,24 +72,19 @@ void DMA1_Stream0_IRQHandler(void)
  *  TC fires when the buffer wraps back to the beginning.
  *  Both trigger processing of any new bytes in the ring.
  * ========================================================================== */
-void DMA1_Stream1_IRQHandler(void)
+/* Was: DMA1_Stream1_IRQHandler */
+void DMA_STR1_IRQHandler(void)
 {
-    /* Half-Transfer */
     if (LL_DMA_IsActiveFlag_HT1(DMA1)) {
         LL_DMA_ClearFlag_HT1(DMA1);
         USART_Driver_RxProcessISR(&usart10_handle);
     }
-
-    /* Transfer Complete (buffer wrapped) */
     if (LL_DMA_IsActiveFlag_TC1(DMA1)) {
         LL_DMA_ClearFlag_TC1(DMA1);
         USART_Driver_RxProcessISR(&usart10_handle);
     }
-
-    /* Transfer Error */
     if (LL_DMA_IsActiveFlag_TE1(DMA1)) {
         LL_DMA_ClearFlag_TE1(DMA1);
-        /* TODO: error counter or recovery */
     }
 }
 
@@ -109,4 +120,12 @@ void USART10_IRQHandler(void)
     if (LL_USART_IsActiveFlag_NE(USART10)) {
         LL_USART_ClearFlag_NE(USART10);
     }
+}
+
+void DMA1_Stream5_IRQHandler(void)
+{
+    LL_DMA_ClearFlag_TC5(DMA1);
+    LL_DMA_ClearFlag_HT5(DMA1);
+    LL_DMA_ClearFlag_TE5(DMA1);
+    LL_DMA_ClearFlag_DME5(DMA1);
 }

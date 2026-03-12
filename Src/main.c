@@ -27,15 +27,20 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "command.h"
-
+#include <string.h>
 /* Protocol parser instance */
 static ProtocolParser usart10_parser;
+
+/* Deferred TX request — set by ISR, consumed by main loop */
+TxRequest tx_request = {0};
 
 /* Private function prototypes -----------------------------------------------*/
 static void SystemInit_Sequence(void);
 static void OnPacketReceived(const PacketHeader *header,
                              const uint8_t *payload,
                              void *ctx);
+
+
 
 /* Entry point */
 int main(void)
@@ -46,12 +51,19 @@ int main(void)
     /* Main loop — UART is fully interrupt-driven, no polling needed.
      * Add other non-interrupt tasks here as the project grows. */
     while (1)
-    {
-        /* TODO: Watchdog refresh */
-        /* TODO: Status LED update */
-        /* TODO: ADC polling */
-        /* TODO: Low-power sleep (WFI) if desired */
-    }
+        {
+            /* Consume pending TX outside of ISR context */
+            if (tx_request.pending) {
+                tx_request.pending = false;
+                USART_Driver_SendPacket(&usart10_handle,
+                                        tx_request.msg1,
+                                        tx_request.msg2,
+                                        tx_request.cmd1,
+                                        tx_request.cmd2,
+                                        tx_request.payload,
+                                        tx_request.length);
+            }
+        }
 }
 
 /* ==========================================================================
