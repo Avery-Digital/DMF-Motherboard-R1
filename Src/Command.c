@@ -236,11 +236,13 @@ static void Command_HandleBurstADC(USART_Handle *handle,
  * ========================================================================== */
 void Command_ExecuteBurstADC(void)
 {
-    static uint8_t burst_payload[ADC_BURST_PAYLOAD_SIZE];
+    static uint8_t  burst_payload[ADC_BURST_PAYLOAD_SIZE];
+    static uint32_t burst_raw[ADC_BURST_COUNT];  /* Debug: raw samples visible in debugger */
 
     for (uint32_t i = 0U; i < ADC_BURST_COUNT; i++) {
         uint32_t   sample = 0U;
         SPI_Status status = SPI_LTC2338_Read(&spi2_handle, &sample);
+        burst_raw[i] = sample;
 
         uint32_t offset = i * 4U;
 
