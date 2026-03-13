@@ -391,7 +391,7 @@ const SPI_Config spi2_cfg = {
         .mode       = LL_GPIO_MODE_INPUT,
         .af         = 0U,
         .speed      = LL_GPIO_SPEED_FREQ_LOW,
-        .pull       = LL_GPIO_PULL_UP,          /* BUSY is open-drain; pull-up to idle HIGH */
+        .pull       = LL_GPIO_PULL_NO,
         .output     = LL_GPIO_OUTPUT_PUSHPULL,  /* N/A for input, set to default            */
     },
 

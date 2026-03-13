@@ -28,6 +28,8 @@
 #include "main.h"
 #include "command.h"
 #include <string.h>
+#include "stm32h7xx_ll_rtc.h"
+#include "spi_driver.h"
 /* Protocol parser instance */
 static ProtocolParser usart10_parser;
 
@@ -71,7 +73,9 @@ int main(void)
  * ========================================================================== */
 static void SystemInit_Sequence(void)
 {
-    InitResult result;
+	InitResult i2c_result;
+	InitResult usart_result;
+	SPI_Status spi_result;
 
     /* Step 1: MCU core — MPU, flash latency, voltage scaling */
     MCU_Init();
@@ -80,17 +84,55 @@ static void SystemInit_Sequence(void)
      *         PLL2 (128 MHz USART kernel), PLL3 (128 MHz SPI/I2C) */
     ClockTree_Init(&sys_clk_config);
 
+    /* Step 2a: Configure SysTick for 1 ms interrupts @ 480 MHz CPU */
+    LL_Init1msTick(sys_clk_config.sysclk_hz);
+    LL_SYSTICK_EnableIT();          /* Enable SysTick interrupt → SysTick_Handler */
+
     /* Step 3: Assert USB2517 strapping pins ASAP.
      *         CFG_SEL1 and CFG_SEL2 must be low before the hub exits
      *         power-on reset so it enters SMBus configuration mode. */
     USB2517_SetStrapPins();
 
     /* Step 4: I2C1 on PB7 (SDA) / PB8 (SCL) */
-    result = I2C_Driver_Init(&i2c1_handle);
-    if (result != INIT_OK) {
-        Error_Handler();
+    i2c_result = I2C_Driver_Init(&i2c1_handle);
+    if (i2c_result != INIT_OK) {
+        Error_Handler(0x10);
     }
+    /* Enable GPIOD clock */
+    LL_AHB4_GRP1_EnableClock(LL_AHB4_GRP1_PERIPH_GPIOD);
 
+    /* Configure PD0–PD6 as outputs */
+    LL_GPIO_InitTypeDef gpio = {0};
+
+    gpio.Pin        = LL_GPIO_PIN_0 |
+                      LL_GPIO_PIN_1 |
+                      LL_GPIO_PIN_2 |
+                      LL_GPIO_PIN_3 |
+                      LL_GPIO_PIN_4 |
+                      LL_GPIO_PIN_5 |
+                      LL_GPIO_PIN_6;
+
+    gpio.Mode       = LL_GPIO_MODE_OUTPUT;
+    gpio.Speed      = LL_GPIO_SPEED_FREQ_HIGH;
+    gpio.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
+    gpio.Pull       = LL_GPIO_PULL_NO;
+
+    LL_GPIO_Init(GPIOD, &gpio);
+
+    /* Force all chip selects HIGH */
+    LL_GPIO_SetOutputPin(GPIOD,
+                         LL_GPIO_PIN_0 |
+                         LL_GPIO_PIN_1 |
+                         LL_GPIO_PIN_2 |
+                         LL_GPIO_PIN_3 |
+                         LL_GPIO_PIN_4 |
+                         LL_GPIO_PIN_5 |
+                         LL_GPIO_PIN_6);
+    /* Step 4b: SPI2 initialization */
+    spi_result = SPI_Init(&spi2_handle);
+    if (spi_result != SPI_OK) {
+        Error_Handler(0x20);
+    }
     /* Step 5: USB2517I hub — write config registers and attach to USB host.
      *         Must complete before the FT231 COM port will enumerate. */
 //    result = USB2517_Init(&i2c1_handle);
@@ -103,13 +145,22 @@ static void SystemInit_Sequence(void)
 
     /* Step 6: USART10 + DMA on PG11 (RX) / PG12 (TX)
      *         Parser is passed to the driver so ISRs can feed it directly */
-    result = USART_Driver_Init(&usart10_handle, &usart10_parser);
-    if (result != INIT_OK) {
-        Error_Handler();
+    usart_result = USART_Driver_Init(&usart10_handle, &usart10_parser);
+    if (usart_result != INIT_OK) {
+        Error_Handler(0x11);
     }
 
     /* Step 7: Start interrupt-driven DMA reception */
     USART_Driver_StartRx(&usart10_handle);
+    /* === BOOT TEST — remove after debugging === */
+    tx_request.msg1    = 0x01;
+    tx_request.msg2    = 0x02;
+    tx_request.cmd1    = 0xDE;
+    tx_request.cmd2    = 0xAD;
+    static const uint8_t test_payload[] = {0xAA, 0xBB, 0xCC};
+    memcpy(tx_request.payload, test_payload, sizeof(test_payload));
+    tx_request.length  = sizeof(test_payload);
+    tx_request.pending = true;
 }
 
 /* ==========================================================================
@@ -135,12 +186,12 @@ static void OnPacketReceived(const PacketHeader *header,
 /* ==========================================================================
  *  ERROR HANDLER
  * ========================================================================== */
-void Error_Handler(void)
+void Error_Handler(uint32_t fault_code)
 {
     __disable_irq();
-    while (1) {
-        /* Halt */
-    }
+    LL_PWR_EnableBkUpAccess();
+    LL_RTC_BAK_SetRegister(RTC, LL_RTC_BKP_DR0, fault_code);
+    while (1);
 }
 
 #ifdef USE_FULL_ASSERT

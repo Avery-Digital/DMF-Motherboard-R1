@@ -7,6 +7,7 @@
  * ========================================================================== */
 
 #include "spi_driver.h"
+#include "ll_tick.h"
 
 /* --------------------------------------------------------------------------
  *  Internal helpers
@@ -14,12 +15,12 @@
 
 /**
  * @brief  Obtain a millisecond timestamp.
- *         Replace with your RTOS tick / HAL_GetTick() / DWT counter as needed.
+ *         LL_GetTick() reads the counter incremented by LL_IncTick()
+ *         in SysTick_Handler (stm32h7xx_it.c).
  */
 static inline uint32_t _tick_ms(void)
 {
-    extern uint32_t HAL_GetTick(void);
-    return HAL_GetTick();
+    return LL_GetTick();
 }
 
 /**
@@ -81,6 +82,8 @@ SPI_Status SPI_Init(SPI_Handle *handle)
 
     LL_SPI_Init(cfg->peripheral, &spi_init);
 
+    /* Required when NSS = SOFT */
+    LL_SPI_SetInternalSSLevel(cfg->peripheral, LL_SPI_SS_LEVEL_HIGH);
     /* H7 SPI: FIFO threshold = 1 data frame — RXP flag asserts when >= 1 complete 32-bit word is ready */
     LL_SPI_SetFIFOThreshold(cfg->peripheral, LL_SPI_FIFO_TH_01DATA);
 
@@ -136,18 +139,11 @@ SPI_Status SPI_LTC2338_Read(SPI_Handle *handle, uint32_t *result_out)
      * ------------------------------------------------------------------ */
     t0 = _tick_ms();
 
-    /* Wait for BUSY to assert HIGH first (t_BUSYLH) */
-    while (LL_GPIO_IsInputPinSet(cfg->busy_pin.port, cfg->busy_pin.pin) == 0U) {
-        if ((_tick_ms() - t0) >= cfg->busy_timeout_ms) {
-            handle->busy  = false;
-            handle->error = SPI_ERR_TIMEOUT;
-            return SPI_ERR_TIMEOUT;
-        }
-    }
-
-    /* Now wait for BUSY to fall LOW — data is ready on the SDO line */
-    while (LL_GPIO_IsInputPinSet(cfg->busy_pin.port, cfg->busy_pin.pin) != 0U) {
-        if ((_tick_ms() - t0) >= cfg->busy_timeout_ms) {
+    /* Wait for BUSY to go LOW (conversion complete) */
+    while (LL_GPIO_IsInputPinSet(cfg->busy_pin.port, cfg->busy_pin.pin))
+    {
+        if ((_tick_ms() - t0) >= cfg->busy_timeout_ms)
+        {
             handle->busy  = false;
             handle->error = SPI_ERR_TIMEOUT;
             return SPI_ERR_TIMEOUT;
@@ -171,25 +167,22 @@ SPI_Status SPI_LTC2338_Read(SPI_Handle *handle, uint32_t *result_out)
      *  Right-shift by 14 to get the 18-bit result in [17:0].
      * ------------------------------------------------------------------ */
 
-    /* Clear any stale RX data */
-    while (LL_SPI_IsActiveFlag_RXWNE(cfg->peripheral)) {
+    /* Clear stale RX and OVR */
+    LL_SPI_ClearFlag_OVR(cfg->peripheral);
+
+    while (LL_SPI_IsActiveFlag_RXP(cfg->peripheral))
+    {
         (void)LL_SPI_ReceiveData32(cfg->peripheral);
     }
 
-    /* Transmit a dummy 32-bit word to clock out the ADC data */
-    t0 = _tick_ms();
-    while (!LL_SPI_IsActiveFlag_TXP(cfg->peripheral)) {
-        if ((_tick_ms() - t0) >= cfg->xfer_timeout_ms) {
-            handle->busy  = false;
-            handle->error = SPI_ERR_TIMEOUT;
-            return SPI_ERR_TIMEOUT;
-        }
-    }
+    while (!LL_SPI_IsActiveFlag_TXP(cfg->peripheral));
+
     LL_SPI_TransmitData32(cfg->peripheral, 0x00000000UL);
-
-    /* Wait for RX word to arrive */
+    LL_SPI_StartMasterTransfer(cfg->peripheral);
+    /* Wait for RX frame */
     t0 = _tick_ms();
-    while (!LL_SPI_IsActiveFlag_RXWNE(cfg->peripheral)) {
+    while (!LL_SPI_IsActiveFlag_RXP(cfg->peripheral))
+    {
         if ((_tick_ms() - t0) >= cfg->xfer_timeout_ms) {
             handle->busy  = false;
             handle->error = SPI_ERR_TIMEOUT;
@@ -197,8 +190,9 @@ SPI_Status SPI_LTC2338_Read(SPI_Handle *handle, uint32_t *result_out)
         }
     }
 
-    /* Check for overrun before reading */
-    if (LL_SPI_IsActiveFlag_OVR(cfg->peripheral)) {
+    /* Check overrun */
+    if (LL_SPI_IsActiveFlag_OVR(cfg->peripheral))
+    {
         LL_SPI_ClearFlag_OVR(cfg->peripheral);
         handle->busy  = false;
         handle->error = SPI_ERR_OVERRUN;

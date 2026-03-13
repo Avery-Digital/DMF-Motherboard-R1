@@ -10,6 +10,8 @@
 /* Includes ------------------------------------------------------------------*/
 #include "clock_config.h"
 
+
+
 /* ==========================================================================
  *  MCU INITIALIZATION
  *
@@ -80,18 +82,26 @@ void MCU_Init(void)
  *    3. Set bus prescalers
  *    4. Configure & enable PLL2, PLL3
  * ========================================================================== */
+
+
 void ClockTree_Init(const ClockTree_Config *clk)
 {
-    /* ---- Enable GPIOH for HSE oscillator pins ---- */
-    LL_AHB4_GRP1_EnableClock(LL_AHB4_GRP1_PERIPH_GPIOH);
+    uint32_t timeout;
+
 
     /* ---- HSE ---- */
     LL_RCC_HSE_Enable();
-    while (LL_RCC_HSE_IsReady() != 1U);
+    timeout = 1000000U;
+    while ((LL_RCC_HSE_IsReady() != 1U) && (--timeout));
+    if (timeout == 0U) Error_Handler(0x01);
+
 
     /* ---- PLL1 ---- */
     LL_RCC_PLL1_Disable();
-    while (LL_RCC_PLL1_IsReady() != 0U);
+    timeout = 10000U;
+    while ((LL_RCC_PLL1_IsReady() != 0U) && (--timeout));
+    if (timeout == 0U) Error_Handler(0x02);
+
 
     if (clk->pll1.enable_p) LL_RCC_PLL1P_Enable();
     if (clk->pll1.enable_q) LL_RCC_PLL1Q_Enable();
@@ -107,19 +117,30 @@ void ClockTree_Init(const ClockTree_Config *clk)
     LL_RCC_PLL1_SetR(clk->pll1.divr);
 
     LL_RCC_PLL1_Enable();
-    while (LL_RCC_PLL1_IsReady() != 1U);
+    timeout = 1000000U;
+    while ((LL_RCC_PLL1_IsReady() != 1U) && (--timeout));
+    if (timeout == 0U) Error_Handler(0x03);
+
 
     /* ---- Set intermediate AHB prescaler before switching SYSCLK ---- */
     LL_RCC_SetAHBPrescaler(LL_RCC_AHB_DIV_2);
 
     /* ---- Switch SYSCLK to PLL1P ---- */
     LL_RCC_SetSysClkSource(LL_RCC_SYS_CLKSOURCE_PLL1);
-    while (LL_RCC_GetSysClkSource() != LL_RCC_SYS_CLKSOURCE_STATUS_PLL1);
+    timeout = 50000U;
+    while ((LL_RCC_GetSysClkSource() != LL_RCC_SYS_CLKSOURCE_STATUS_PLL1) && (--timeout));
+    if (timeout == 0U) Error_Handler(0x04);
 
+    /* ---- Wait for clock to stabilize after SYSCLK switch ---- */
+	volatile uint32_t stab = 100000U;
+	while (stab--);
     /* ---- Bus prescalers (final values) ---- */
     LL_RCC_SetSysPrescaler(clk->prescalers.d1cpre);
+
     LL_RCC_SetAHBPrescaler(clk->prescalers.hpre);
+
     LL_RCC_SetAPB3Prescaler(clk->prescalers.d1ppre);
+
     LL_RCC_SetAPB1Prescaler(clk->prescalers.d2ppre1);
     LL_RCC_SetAPB2Prescaler(clk->prescalers.d2ppre2);
     LL_RCC_SetAPB4Prescaler(clk->prescalers.d3ppre);
@@ -128,9 +149,12 @@ void ClockTree_Init(const ClockTree_Config *clk)
     LL_Init1msTick(clk->sysclk_hz);
     LL_SetSystemCoreClock(clk->sysclk_hz);
 
+
     /* ---- PLL2 ---- */
     LL_RCC_PLL2_Disable();
-    while (LL_RCC_PLL2_IsReady() != 0U);
+    timeout = 10000U;
+    while ((LL_RCC_PLL2_IsReady() != 0U) && (--timeout));
+    if (timeout == 0U) Error_Handler(0x05);
 
     if (clk->pll2.enable_p) LL_RCC_PLL2P_Enable();
     if (clk->pll2.enable_q) LL_RCC_PLL2Q_Enable();
@@ -145,11 +169,16 @@ void ClockTree_Init(const ClockTree_Config *clk)
     LL_RCC_PLL2_SetR(clk->pll2.divr);
 
     LL_RCC_PLL2_Enable();
-    while (LL_RCC_PLL2_IsReady() != 1U);
+    timeout = 50000U;
+    while ((LL_RCC_PLL2_IsReady() != 1U) && (--timeout));
+    if (timeout == 0U) Error_Handler(0x06);
+
 
     /* ---- PLL3 ---- */
     LL_RCC_PLL3_Disable();
-    while (LL_RCC_PLL3_IsReady() != 0U);
+    timeout = 10000U;
+    while ((LL_RCC_PLL3_IsReady() != 0U) && (--timeout));
+    if (timeout == 0U) Error_Handler(0x07);
 
     if (clk->pll3.enable_p) LL_RCC_PLL3P_Enable();
     if (clk->pll3.enable_q) LL_RCC_PLL3Q_Enable();
@@ -164,5 +193,10 @@ void ClockTree_Init(const ClockTree_Config *clk)
     LL_RCC_PLL3_SetR(clk->pll3.divr);
 
     LL_RCC_PLL3_Enable();
-    while (LL_RCC_PLL3_IsReady() != 1U);
+    timeout = 50000U;
+    while ((LL_RCC_PLL3_IsReady() != 1U) && (--timeout));
+    if (timeout == 0U) Error_Handler(0x08);
+
+    /* Select SPI kernel clock */
+    LL_RCC_SetSPIClockSource(LL_RCC_SPI123_CLKSOURCE_PLL3P);
 }

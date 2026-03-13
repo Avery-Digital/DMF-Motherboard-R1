@@ -32,6 +32,8 @@ void MCU_Init(void);
  */
 void ClockTree_Init(const ClockTree_Config *clk);
 
+void Error_Handler(uint32_t fault_code);
+
 #ifdef __cplusplus
 }
 #endif

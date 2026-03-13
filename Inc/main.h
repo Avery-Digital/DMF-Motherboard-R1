@@ -18,6 +18,7 @@ extern "C" {
 #include "bsp.h"
 #include "clock_config.h"
 #include "i2c_driver.h"
+#include "spi_driver.h"
 #include "usart_driver.h"
 #include "usb2517.h"
 #include <stdint.h>
@@ -33,7 +34,7 @@ typedef struct {
 
 extern TxRequest tx_request;
 /* Exported functions --------------------------------------------------------*/
-void Error_Handler(void);
+void Error_Handler(uint32_t fault_code);
 
 #ifdef __cplusplus
 }
