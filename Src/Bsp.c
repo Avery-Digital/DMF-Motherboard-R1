@@ -456,6 +456,405 @@ const PinConfig usb2517_cfg_sel2_pin = {
 };
 
 /* ==========================================================================
+ *  DRV8702DQRHBRQ1 — TEC H-BRIDGE DRIVER, INSTANCE 1
+ *
+ *  All three DRV8702 circuits share SPI2 (Mode 0, PLL3Q = 128 MHz kernel).
+ *  The driver uses 16-bit SPI frames and temporarily reconfigures SPI2 data
+ *  width during each register access, restoring 32-bit for the LTC2338 ADC.
+ *
+ *  IN1/PH  : PE9,  Pin 69  — Direction control          (output, no AF)
+ *  IN2/EN  : PE11, Pin 73  — Enable / PWM input         (output, no AF)
+ *  nSLEEP  : PG5,  Pin 115 — Active-low sleep           (output, no AF)
+ *  MODE    : PG6,  Pin 116 — PH/EN vs PWM mode select   (output, no AF)
+ *  nSCS    : PD1,  Pin 144 — SPI chip select, active-low (output, no AF)
+ *  nFAULT  : PG7,  Pin 117 — Active-low fault indicator (input, pull-up)
+ *
+ *  NOTE: PE9 and PE11 are also TIM1_CH1 / TIM1_CH2 (AF1).  If PWM control
+ *  is added in future, reconfigure those pins to AF mode at that time.
+ *
+ *  NOTE: PD1 is one of the seven chip-select lines already driven HIGH in
+ *  SystemInit_Sequence (main.c).  DRV8702_Init() re-initialises it, which
+ *  is harmless and ensures the correct state even if init order changes.
+ * ========================================================================== */
+DRV8702_Config drv8702_1_cfg = {
+
+    /* IN1/PH — PE9, Pin 69 */
+    .ph_pin = {
+        .clk        = LL_AHB4_GRP1_PERIPH_GPIOE,
+        .port       = GPIOE,
+        .pin        = LL_GPIO_PIN_9,
+        .mode       = LL_GPIO_MODE_OUTPUT,
+        .af         = 0U,
+        .speed      = LL_GPIO_SPEED_FREQ_HIGH,
+        .pull       = LL_GPIO_PULL_NO,
+        .output     = LL_GPIO_OUTPUT_PUSHPULL,
+    },
+
+    /* IN2/EN — PE11, Pin 73 */
+    .en_pin = {
+        .clk        = LL_AHB4_GRP1_PERIPH_GPIOE,
+        .port       = GPIOE,
+        .pin        = LL_GPIO_PIN_11,
+        .mode       = LL_GPIO_MODE_OUTPUT,
+        .af         = 0U,
+        .speed      = LL_GPIO_SPEED_FREQ_HIGH,
+        .pull       = LL_GPIO_PULL_NO,
+        .output     = LL_GPIO_OUTPUT_PUSHPULL,
+    },
+
+    /* nSLEEP — PG5, Pin 115 */
+    .nsleep_pin = {
+        .clk        = LL_AHB4_GRP1_PERIPH_GPIOG,
+        .port       = GPIOG,
+        .pin        = LL_GPIO_PIN_5,
+        .mode       = LL_GPIO_MODE_OUTPUT,
+        .af         = 0U,
+        .speed      = LL_GPIO_SPEED_FREQ_LOW,
+        .pull       = LL_GPIO_PULL_NO,
+        .output     = LL_GPIO_OUTPUT_PUSHPULL,
+    },
+
+    /* MODE — PG6, Pin 116 */
+    .mode_pin = {
+        .clk        = LL_AHB4_GRP1_PERIPH_GPIOG,
+        .port       = GPIOG,
+        .pin        = LL_GPIO_PIN_6,
+        .mode       = LL_GPIO_MODE_OUTPUT,
+        .af         = 0U,
+        .speed      = LL_GPIO_SPEED_FREQ_LOW,
+        .pull       = LL_GPIO_PULL_NO,
+        .output     = LL_GPIO_OUTPUT_PUSHPULL,
+    },
+
+    /* nSCS — PD1, Pin 144 */
+    .ncs_pin = {
+        .clk        = LL_AHB4_GRP1_PERIPH_GPIOD,
+        .port       = GPIOD,
+        .pin        = LL_GPIO_PIN_1,
+        .mode       = LL_GPIO_MODE_OUTPUT,
+        .af         = 0U,
+        .speed      = LL_GPIO_SPEED_FREQ_HIGH,
+        .pull       = LL_GPIO_PULL_NO,
+        .output     = LL_GPIO_OUTPUT_PUSHPULL,
+    },
+
+    /* nFAULT — PG7, Pin 117 (open-drain output from DRV8702, pull-up on STM32) */
+    .nfault_pin = {
+        .clk        = LL_AHB4_GRP1_PERIPH_GPIOG,
+        .port       = GPIOG,
+        .pin        = LL_GPIO_PIN_7,
+        .mode       = LL_GPIO_MODE_INPUT,
+        .af         = 0U,
+        .speed      = LL_GPIO_SPEED_FREQ_LOW,
+        .pull       = LL_GPIO_PULL_UP,
+        .output     = LL_GPIO_OUTPUT_PUSHPULL,  /* N/A for input */
+    },
+
+    .spi      = SPI2,
+    .instance = 1U,
+};
+
+DRV8702_Handle drv8702_1_handle = {
+    .cfg             = &drv8702_1_cfg,
+    .initialised     = false,
+    .faulted         = false,
+    .last_fault_reg  = 0U,
+};
+
+/* ==========================================================================
+ *  DRV8702DQRHBRQ1 — TEC H-BRIDGE DRIVER, INSTANCE 2
+ *
+ *
+ * ========================================================================== */
+DRV8702_Config drv8702_2_cfg = {
+
+    /* IN1/PH */
+    .ph_pin = {
+        .clk        = LL_AHB4_GRP1_PERIPH_GPIOE,
+        .port       = GPIOE,
+        .pin        = LL_GPIO_PIN_13,
+        .mode       = LL_GPIO_MODE_OUTPUT,
+        .af         = 0U,
+        .speed      = LL_GPIO_SPEED_FREQ_HIGH,
+        .pull       = LL_GPIO_PULL_NO,
+        .output     = LL_GPIO_OUTPUT_PUSHPULL,
+    },
+
+    /* IN2/EN */
+    .en_pin = {
+        .clk        = LL_AHB4_GRP1_PERIPH_GPIOE,
+        .port       = GPIOE,
+        .pin        = LL_GPIO_PIN_14,
+        .mode       = LL_GPIO_MODE_OUTPUT,
+        .af         = 0U,
+        .speed      = LL_GPIO_SPEED_FREQ_HIGH,
+        .pull       = LL_GPIO_PULL_NO,
+        .output     = LL_GPIO_OUTPUT_PUSHPULL,
+    },
+
+    /* nSLEEP  */
+    .nsleep_pin = {
+        .clk        = LL_AHB4_GRP1_PERIPH_GPIOF,
+        .port       = GPIOF,
+        .pin        = LL_GPIO_PIN_0,
+        .mode       = LL_GPIO_MODE_OUTPUT,
+        .af         = 0U,
+        .speed      = LL_GPIO_SPEED_FREQ_LOW,
+        .pull       = LL_GPIO_PULL_NO,
+        .output     = LL_GPIO_OUTPUT_PUSHPULL,
+    },
+
+    /* MODE */
+    .mode_pin = {
+        .clk        = LL_AHB4_GRP1_PERIPH_GPIOF,
+        .port       = GPIOF,
+        .pin        = LL_GPIO_PIN_1,
+        .mode       = LL_GPIO_MODE_OUTPUT,
+        .af         = 0U,
+        .speed      = LL_GPIO_SPEED_FREQ_LOW,
+        .pull       = LL_GPIO_PULL_NO,
+        .output     = LL_GPIO_OUTPUT_PUSHPULL,
+    },
+
+    /* nSCS  */
+    .ncs_pin = {
+        .clk        = LL_AHB4_GRP1_PERIPH_GPIOD,
+        .port       = GPIOD,
+        .pin        = LL_GPIO_PIN_0,
+        .mode       = LL_GPIO_MODE_OUTPUT,
+        .af         = 0U,
+        .speed      = LL_GPIO_SPEED_FREQ_HIGH,
+        .pull       = LL_GPIO_PULL_NO,
+        .output     = LL_GPIO_OUTPUT_PUSHPULL,
+    },
+
+    /* nFAULT  */
+    .nfault_pin = {
+        .clk        = LL_AHB4_GRP1_PERIPH_GPIOF,
+        .port       = GPIOF,
+        .pin        = LL_GPIO_PIN_2,
+        .mode       = LL_GPIO_MODE_INPUT,
+        .af         = 0U,
+        .speed      = LL_GPIO_SPEED_FREQ_LOW,
+        .pull       = LL_GPIO_PULL_UP,
+        .output     = LL_GPIO_OUTPUT_PUSHPULL,
+    },
+
+    .spi      = SPI2,
+    .instance = 2U,
+};
+
+DRV8702_Handle drv8702_2_handle = {
+    .cfg             = &drv8702_2_cfg,
+    .initialised     = false,
+    .faulted         = false,
+    .last_fault_reg  = 0U,
+};
+
+/* ==========================================================================
+ *  DRV8702DQRHBRQ1 — TEC H-BRIDGE DRIVER, INSTANCE 3
+ *
+ *  TODO: Fill in the correct pin assignments below.
+ *  Replace every 0U pin value and NULL port pointer with the real values.
+ * ========================================================================== */
+DRV8702_Config drv8702_3_cfg = {
+
+    /* IN1/PH */
+    .ph_pin = {
+        .clk        = LL_AHB4_GRP1_PERIPH_GPIOJ,
+        .port       = GPIOJ,
+        .pin        = LL_GPIO_PIN_8,
+        .mode       = LL_GPIO_MODE_OUTPUT,
+        .af         = 0U,
+        .speed      = LL_GPIO_SPEED_FREQ_HIGH,
+        .pull       = LL_GPIO_PULL_NO,
+        .output     = LL_GPIO_OUTPUT_PUSHPULL,
+    },
+
+    /* IN2/EN  */
+    .en_pin = {
+        .clk        = LL_AHB4_GRP1_PERIPH_GPIOJ,
+        .port       = GPIOJ,
+        .pin        = LL_GPIO_PIN_10,
+        .mode       = LL_GPIO_MODE_OUTPUT,
+        .af         = 0U,
+        .speed      = LL_GPIO_SPEED_FREQ_HIGH,
+        .pull       = LL_GPIO_PULL_NO,
+        .output     = LL_GPIO_OUTPUT_PUSHPULL,
+    },
+
+    /* nSLEEP */
+    .nsleep_pin = {
+        .clk        = LL_AHB4_GRP1_PERIPH_GPIOF,
+        .port       = GPIOF,
+        .pin        = LL_GPIO_PIN_12,
+        .mode       = LL_GPIO_MODE_OUTPUT,
+        .af         = 0U,
+        .speed      = LL_GPIO_SPEED_FREQ_LOW,
+        .pull       = LL_GPIO_PULL_NO,
+        .output     = LL_GPIO_OUTPUT_PUSHPULL,
+    },
+
+    /* MODE */
+    .mode_pin = {
+        .clk        = LL_AHB4_GRP1_PERIPH_GPIOF,
+        .port       = GPIOF,
+        .pin        = LL_GPIO_PIN_13,
+        .mode       = LL_GPIO_MODE_OUTPUT,
+        .af         = 0U,
+        .speed      = LL_GPIO_SPEED_FREQ_LOW,
+        .pull       = LL_GPIO_PULL_NO,
+        .output     = LL_GPIO_OUTPUT_PUSHPULL,
+    },
+
+    /* nSCS */
+    .ncs_pin = {
+        .clk        = LL_AHB4_GRP1_PERIPH_GPIOD,
+        .port       = GPIOD,
+        .pin        = LL_GPIO_PIN_6,
+        .mode       = LL_GPIO_MODE_OUTPUT,
+        .af         = 0U,
+        .speed      = LL_GPIO_SPEED_FREQ_HIGH,
+        .pull       = LL_GPIO_PULL_NO,
+        .output     = LL_GPIO_OUTPUT_PUSHPULL,
+    },
+
+    /* nFAULT  */
+    .nfault_pin = {
+        .clk        = LL_AHB4_GRP1_PERIPH_GPIOF,
+        .port       = GPIOF,
+        .pin        = LL_GPIO_PIN_14,
+        .mode       = LL_GPIO_MODE_INPUT,
+        .af         = 0U,
+        .speed      = LL_GPIO_SPEED_FREQ_LOW,
+        .pull       = LL_GPIO_PULL_UP,
+        .output     = LL_GPIO_OUTPUT_PUSHPULL,
+    },
+
+    .spi      = SPI2,
+    .instance = 3U,
+};
+
+DRV8702_Handle drv8702_3_handle = {
+    .cfg             = &drv8702_3_cfg,
+    .initialised     = false,
+    .faulted         = false,
+    .last_fault_reg  = 0U,
+};
+
+/* ==========================================================================
+ *  DAC80508ZRTER — 8-CHANNEL 16-BIT DAC
+ *
+ *  Shares SPI2 with LTC2338-18 and DRV8702.  Uses 24-bit SPI frames in
+ *  Mode 1 (CPOL=0, CPHA=1).  The driver temporarily reconfigures SPI2
+ *  for each transfer and restores 32-bit Mode 0 on exit.
+ *
+ *  nCS : PD2, Pin 145 — SPI chip select, active-low
+ *
+ *  NOTE: PD2 is one of the seven chip-select lines already driven HIGH in
+ *  SystemInit_Sequence (main.c).  DAC80508_Init() re-initialises it, which
+ *  is harmless and ensures the correct state even if init order changes.
+ * ========================================================================== */
+DAC80508_Config dac80508_cfg = {
+
+    /* nCS — PD2, Pin 145 */
+    .ncs_pin = {
+        .clk        = LL_AHB4_GRP1_PERIPH_GPIOD,
+        .port       = GPIOD,
+        .pin        = LL_GPIO_PIN_2,
+        .mode       = LL_GPIO_MODE_OUTPUT,
+        .af         = 0U,
+        .speed      = LL_GPIO_SPEED_FREQ_HIGH,
+        .pull       = LL_GPIO_PULL_NO,
+        .output     = LL_GPIO_OUTPUT_PUSHPULL,
+    },
+
+    .spi = SPI2,
+};
+
+DAC80508_Handle dac80508_handle = {
+    .cfg         = &dac80508_cfg,
+    .initialised = false,
+};
+
+/* ==========================================================================
+ *  ADS7066IRTER — 8-CHANNEL 16-BIT SAR ADC (3 INSTANCES)
+ *
+ *  All three share SPI2 (Mode 0).  Uses 24-bit frames for register access
+ *  and 16-bit frames for ADC data reads.  Only the data width is changed;
+ *  CPOL/CPHA remain at Mode 0.
+ *
+ *  Instance 1: nCS on PD5, Pin 148
+ *  Instance 2: nCS on PD4, Pin 147
+ *  Instance 3: nCS on PD3, Pin 146
+ *
+ *  NOTE: PD3–PD5 are among the seven chip-select lines already driven HIGH
+ *  in SystemInit_Sequence (main.c).
+ * ========================================================================== */
+ADS7066_Config ads7066_1_cfg = {
+    .ncs_pin = {
+        .clk        = LL_AHB4_GRP1_PERIPH_GPIOD,
+        .port       = GPIOD,
+        .pin        = LL_GPIO_PIN_5,
+        .mode       = LL_GPIO_MODE_OUTPUT,
+        .af         = 0U,
+        .speed      = LL_GPIO_SPEED_FREQ_HIGH,
+        .pull       = LL_GPIO_PULL_NO,
+        .output     = LL_GPIO_OUTPUT_PUSHPULL,
+    },
+    .spi      = SPI2,
+    .instance = 1U,
+};
+
+ADS7066_Handle ads7066_1_handle = {
+    .cfg             = &ads7066_1_cfg,
+    .initialised     = false,
+    .current_channel = 0U,
+};
+
+ADS7066_Config ads7066_2_cfg = {
+    .ncs_pin = {
+        .clk        = LL_AHB4_GRP1_PERIPH_GPIOD,
+        .port       = GPIOD,
+        .pin        = LL_GPIO_PIN_4,
+        .mode       = LL_GPIO_MODE_OUTPUT,
+        .af         = 0U,
+        .speed      = LL_GPIO_SPEED_FREQ_HIGH,
+        .pull       = LL_GPIO_PULL_NO,
+        .output     = LL_GPIO_OUTPUT_PUSHPULL,
+    },
+    .spi      = SPI2,
+    .instance = 2U,
+};
+
+ADS7066_Handle ads7066_2_handle = {
+    .cfg             = &ads7066_2_cfg,
+    .initialised     = false,
+    .current_channel = 0U,
+};
+
+ADS7066_Config ads7066_3_cfg = {
+    .ncs_pin = {
+        .clk        = LL_AHB4_GRP1_PERIPH_GPIOD,
+        .port       = GPIOD,
+        .pin        = LL_GPIO_PIN_3,
+        .mode       = LL_GPIO_MODE_OUTPUT,
+        .af         = 0U,
+        .speed      = LL_GPIO_SPEED_FREQ_HIGH,
+        .pull       = LL_GPIO_PULL_NO,
+        .output     = LL_GPIO_OUTPUT_PUSHPULL,
+    },
+    .spi      = SPI2,
+    .instance = 3U,
+};
+
+ADS7066_Handle ads7066_3_handle = {
+    .cfg             = &ads7066_3_cfg,
+    .initialised     = false,
+    .current_channel = 0U,
+};
+
+/* ==========================================================================
  *  GPIO PIN INITIALIZATION
  *
  *  Generic single-pin init from a PinConfig struct.

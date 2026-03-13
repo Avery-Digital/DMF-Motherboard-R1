@@ -32,7 +32,21 @@ typedef struct {
     uint16_t        length;
 } TxRequest;
 
-extern TxRequest tx_request;
+/**
+ * @brief  Deferred request for commands that are too heavy to execute in
+ *         ISR context (e.g. burst ADC reads).  The ISR handler populates
+ *         this struct and sets pending; the main loop does the actual work.
+ */
+typedef struct {
+    volatile bool   pending;
+    uint8_t         msg1;
+    uint8_t         msg2;
+    uint8_t         cmd1;
+    uint8_t         cmd2;
+} BurstRequest;
+
+extern TxRequest    tx_request;
+extern BurstRequest burst_request;
 /* Exported functions --------------------------------------------------------*/
 void Error_Handler(uint32_t fault_code);
 

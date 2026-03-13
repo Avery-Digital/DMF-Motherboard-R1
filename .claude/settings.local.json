@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(\"C:\\\\Users\\\\CamCarrillo\\\\AppData\\\\Local\\\\Python\\\\bin\\\\python3.exe\" -c \"\nimport sys, fitz\nsys.stdout.reconfigure\\(encoding='utf-8'\\)\ndoc = fitz.open\\(r'C:\\\\STM32_Firmware\\\\Datasheets\\\\ADC - ADS7066IRTER.pdf'\\)\nfor i in [19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33]:\n    text = doc[i].get_text\\(\\)\n    print\\(f'--- Page {i+1} ---'\\)\n    print\\(text[:4000]\\)\n    print\\(\\)\n\" 2>&1)",
+      "Bash(\"C:\\\\Users\\\\CamCarrillo\\\\AppData\\\\Local\\\\Python\\\\bin\\\\python3.exe\" -c \"\nimport sys, fitz\nsys.stdout.reconfigure\\(encoding='utf-8'\\)\ndoc = fitz.open\\(r'C:\\\\STM32_Firmware\\\\DMF-Motherboard-R1\\\\Datasheets\\\\POWER LOAD SWITCHES - VN5T016AHTR-E.pdf'\\)\nprint\\(f'Pages: {len\\(doc\\)}'\\)\nfor i in range\\(min\\(8, len\\(doc\\)\\)\\):\n    text = doc[i].get_text\\(\\)\n    print\\(f'--- Page {i+1} ---'\\)\n    print\\(text[:3000]\\)\n    print\\(\\)\n\" 2>&1)"
+    ]
+  }
+}

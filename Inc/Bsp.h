@@ -344,6 +344,80 @@ typedef struct {
     volatile uint32_t   error;               /**< Last error flags             */
 } I2C_Handle;
 
+/* ========================= DRV8702 Configuration ========================== */
+
+/**
+ * @brief  DRV8702DQRHBRQ1 H-Bridge Motor Driver pin and peripheral config.
+ *
+ *         Three instances share SPI2.  Each instance has a unique nSCS pin.
+ *         Config structs and handles are defined in Bsp.c; the driver API
+ *         and register definitions live in DRV8702.h.
+ */
+typedef struct {
+    PinConfig    ph_pin;      /**< IN1/PH  — direction control  (output)          */
+    PinConfig    en_pin;      /**< IN2/EN  — enable / PWM input (output)          */
+    PinConfig    nsleep_pin;  /**< nSLEEP — active-low sleep    (output)          */
+    PinConfig    mode_pin;    /**< MODE   — PH/EN vs PWM select (output)          */
+    PinConfig    ncs_pin;     /**< nSCS   — SPI chip select, active-low (output)  */
+    PinConfig    nfault_pin;  /**< nFAULT — active-low fault indicator (input)    */
+    SPI_TypeDef *spi;         /**< SPI peripheral shared between all instances    */
+    uint8_t      instance;    /**< Instance identifier: 1, 2, or 3               */
+} DRV8702_Config;
+
+/**
+ * @brief  Mutable runtime state for one DRV8702 instance.
+ */
+typedef struct {
+    const DRV8702_Config *cfg;
+    bool     initialised;
+    bool     faulted;           /**< Set when nFAULT pin is asserted (latched) */
+    uint16_t last_fault_reg;    /**< Most recent IC_STAT value read via SPI    */
+} DRV8702_Handle;
+
+/* ========================= DAC80508 Configuration ========================= */
+
+/**
+ * @brief  DAC80508ZRTER 8-channel 16-bit DAC pin and peripheral config.
+ *
+ *         Shares SPI2 with LTC2338-18 and DRV8702.  Has a unique nCS pin.
+ *         Config struct and handle defined in Bsp.c.
+ */
+typedef struct {
+    PinConfig    ncs_pin;     /**< nCS — SPI chip select, active-low (output) */
+    SPI_TypeDef *spi;         /**< SPI peripheral shared with other devices   */
+} DAC80508_Config;
+
+/**
+ * @brief  Mutable runtime state for the DAC80508.
+ */
+typedef struct {
+    const DAC80508_Config *cfg;
+    bool     initialised;
+} DAC80508_Handle;
+
+/* ========================= ADS7066 Configuration ========================== */
+
+/**
+ * @brief  ADS7066IRTER 8-channel 16-bit SAR ADC pin and peripheral config.
+ *
+ *         Three instances share SPI2.  Each has a unique nCS pin.
+ *         Uses 24-bit SPI Mode 0 for register access, 16-bit for data reads.
+ */
+typedef struct {
+    PinConfig    ncs_pin;     /**< nCS — SPI chip select, active-low (output) */
+    SPI_TypeDef *spi;         /**< SPI peripheral shared with other devices   */
+    uint8_t      instance;    /**< Instance identifier: 1, 2, or 3            */
+} ADS7066_Config;
+
+/**
+ * @brief  Mutable runtime state for one ADS7066 instance.
+ */
+typedef struct {
+    const ADS7066_Config *cfg;
+    bool     initialised;
+    uint8_t  current_channel;   /**< Last selected MANUAL_CHID (0–7)         */
+} ADS7066_Handle;
+
 /* ======================== Utility Prototypes ============================== */
 
 /**
@@ -377,6 +451,41 @@ extern I2C_Handle               i2c1_handle;
 /* USB2517I strapping pins */
 extern const PinConfig          usb2517_cfg_sel1_pin;   /* PG1 — Pin 66 */
 extern const PinConfig          usb2517_cfg_sel2_pin;   /* PG0 — Pin 63 */
+
+/* DRV8702DQRHBRQ1 — TEC H-Bridge Motor Driver, Instance 1
+ *   IN1/PH  : PE9  (Pin 69)    IN2/EN  : PE11 (Pin 73)
+ *   nSLEEP  : PG5  (Pin 115)   MODE    : PG6  (Pin 116)
+ *   nSCS    : PD1  (Pin 144)   nFAULT  : PG7  (Pin 117)  */
+extern DRV8702_Config           drv8702_1_cfg;
+extern DRV8702_Handle           drv8702_1_handle;
+
+/* DRV8702DQRHBRQ1 — TEC H-Bridge Motor Driver, Instance 2  (pins TBD) */
+extern DRV8702_Config           drv8702_2_cfg;
+extern DRV8702_Handle           drv8702_2_handle;
+
+/* DRV8702DQRHBRQ1 — TEC H-Bridge Motor Driver, Instance 3  (pins TBD) */
+extern DRV8702_Config           drv8702_3_cfg;
+extern DRV8702_Handle           drv8702_3_handle;
+
+/* DAC80508ZRTER — 8-channel 16-bit DAC
+ *   nCS : PD2 (Pin 145)   Shares SPI2 bus                              */
+extern DAC80508_Config          dac80508_cfg;
+extern DAC80508_Handle          dac80508_handle;
+
+/* ADS7066IRTER — 8-channel 16-bit ADC, Instance 1
+ *   nCS : PD5 (Pin 148)   Shares SPI2 bus                              */
+extern ADS7066_Config           ads7066_1_cfg;
+extern ADS7066_Handle           ads7066_1_handle;
+
+/* ADS7066IRTER — 8-channel 16-bit ADC, Instance 2
+ *   nCS : PD4 (Pin 147)   Shares SPI2 bus                              */
+extern ADS7066_Config           ads7066_2_cfg;
+extern ADS7066_Handle           ads7066_2_handle;
+
+/* ADS7066IRTER — 8-channel 16-bit ADC, Instance 3
+ *   nCS : PD3 (Pin 146)   Shares SPI2 bus                              */
+extern ADS7066_Config           ads7066_3_cfg;
+extern ADS7066_Handle           ads7066_3_handle;
 
 #ifdef __cplusplus
 }

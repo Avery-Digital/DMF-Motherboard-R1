@@ -2,6 +2,8 @@
 
 Bare-metal embedded firmware for the **DMF Motherboard Rev 1** built around the **STM32H735IGT6** microcontroller. The board interfaces with a host PC over USB (via USB2517I hub + FT231XQ USB-UART bridge) using a custom framed serial protocol with CRC-16 integrity checking.
 
+The system controls **3 TEC (thermoelectric cooler) H-bridges** and reads an **18-bit ADC** for temperature/voltage sensing, all commanded remotely by a host PC.
+
 ## Target Hardware
 
 | Parameter | Value |
@@ -9,6 +11,11 @@ Bare-metal embedded firmware for the **DMF Motherboard Rev 1** built around the 
 | MCU | STM32H735IGT6 (Cortex-M7, 480 MHz) |
 | Package | LQFP-176 |
 | HSE Crystal | 12 MHz (PH0-OSC_IN) |
+| Fast ADC | LTC2338-18 (18-bit, SPI) |
+| Slow ADC | ADS7066IRTER x3 (8-ch 16-bit, SPI) |
+| DAC | DAC80508ZRTER (8-ch 16-bit, SPI) |
+| TEC Drivers | DRV8702DQRHBRQ1 x3 (H-bridge, shared SPI + GPIO) |
+| Load Switches | VN5T016AHTR-E x10 (high-side, GPIO enable) |
 | USB Hub | USB2517I-JZX (I2C-configured, 7-port hub) |
 | USB-UART Bridge | FT231XQ-T |
 | Debug Interface | SWD (SWDIO, SWCLK, SWO) |
@@ -70,35 +77,50 @@ J-Link> g
 ## Project Structure
 
 ```
-├── Core/
-│   ├── Inc/
-│   │   ├── main.h                  Main header
-│   │   ├── bsp.h                   Board Support Package — all type defs
-│   │   ├── clock_config.h          Clock init prototypes
-│   │   ├── i2c_driver.h            Generic I2C master driver
-│   │   ├── usart_driver.h          USART + DMA driver
-│   │   ├── crc16.h                 CRC-16 CCITT
-│   │   ├── packet_protocol.h       Frame parser and packet builder
-│   │   ├── command.h               Command definitions and dispatch
-│   │   └── usb2517.h               USB hub device driver
-│   └── Src/
-│       ├── main.c                  Entry point and init sequence
-│       ├── bsp.c                   Const config structs and pin init
-│       ├── clock_config.c          MCU init, PLL config, prescalers
-│       ├── i2c_driver.c            Polled I2C master operations
-│       ├── usart_driver.c          USART10 + DMA TX/RX
-│       ├── crc16.c                 CRC-16 lookup table
-│       ├── packet_protocol.c       Frame state machine
-│       ├── command.c               Command handlers
-│       └── usb2517.c               USB2517I config and attach
+├── Inc/
+│   ├── main.h                  Main header, TxRequest/BurstRequest types
+│   ├── Bsp.h                   Board Support Package — all type definitions
+│   ├── Clock_Config.h          Clock init prototypes
+│   ├── i2c_driver.h            Generic I2C master driver
+│   ├── Usart_Driver.h          USART + DMA driver (interrupt-driven)
+│   ├── spi_driver.h            SPI2 driver for LTC2338-18 ADC
+│   ├── DRV8702.h               TEC H-bridge driver — register map and API
+│   ├── VN5T016AH.h             High-side load switch driver (10 instances)
+│   ├── DAC80508.h              DAC80508 8-ch 16-bit DAC driver
+│   ├── ADS7066.h               ADS7066 8-ch 16-bit slow ADC driver
+│   ├── crc16.h                 CRC-16 CCITT
+│   ├── Packet_Protocol.h       Frame parser and packet builder
+│   ├── Command.h               Command definitions and dispatch
+│   ├── USB2517.h               USB hub device driver
+│   └── ll_tick.h               SysTick millisecond counter
+├── Src/
+│   ├── main.c                  Entry point, init sequence, main loop
+│   ├── Bsp.c                   Const config structs, DMA buffers, Pin_Init()
+│   ├── Clock_Config.c          MCU init, PLL1/2/3, bus prescalers
+│   ├── i2c_driver.c            Polled I2C1 master operations
+│   ├── Usart_Driver.c          USART10 + DMA TX/RX (interrupt-driven)
+│   ├── spi_driver.c            SPI2 init + LTC2338-18 polled read
+│   ├── DRV8702.c               DRV8702 GPIO control + SPI register access
+│   ├── VN5T016AH.c             Load switch enable/disable (GPIO only)
+│   ├── DAC80508.c              DAC80508 init, channel set, register access
+│   ├── ADS7066.c               ADS7066 init, channel read, register access
+│   ├── crc16.c                 CRC-16 lookup table
+│   ├── Packet_Protocol.c       Frame state machine and packet builder
+│   ├── Command.c               Command dispatch + handlers
+│   ├── USB2517.c               USB2517I I2C config and attach
+│   ├── ll_tick.c               LL_IncTick / LL_GetTick implementation
+│   └── stm32h7xx_it.c          ISR handlers (SysTick, DMA, USART, faults)
 ├── docs/
-│   ├── architecture.md             Software architecture and data flow
-│   ├── packet_protocol.md          Serial protocol specification
-│   ├── clock_config.md             Clock tree details and PLL math
-│   ├── pin_assignments.md          MCU pin mapping
-│   └── i2c_devices.md              I2C bus device table
-├── STM32H735IGTX_FLASH.ld         Linker script
-└── README.md                       This file
+│   ├── architecture.md         Software architecture and data flow
+│   ├── packet_protocol.md      Serial protocol specification
+│   ├── command_reference.md    Command codes, payloads, and responses
+│   ├── spi_adc.md              SPI2 driver and LTC2338-18 ADC details
+│   ├── drv8702.md              DRV8702 TEC H-bridge driver details
+│   ├── clock_config.md         Clock tree details and PLL math
+│   ├── pin_assignments.md      MCU pin mapping (all peripherals)
+│   └── i2c_devices.md          I2C bus device table
+├── STM32H735IGTX_FLASH.ld     Linker script
+└── README.md                   This file
 ```
 
 ## Architecture Overview
@@ -107,30 +129,54 @@ The firmware uses a layered architecture with strict separation of concerns:
 
 | Layer | Files | Purpose |
 |-------|-------|---------|
-| **BSP** | `bsp.h/c` | Hardware configuration data — pins, clocks, addresses. Only file that changes when porting to a different PCB. |
-| **Drivers** | `i2c_driver`, `usart_driver`, `clock_config` | Reusable peripheral drivers. Operate on handle pointers, contain no board-specific constants. |
-| **Protocol** | `crc16`, `packet_protocol` | Transport-agnostic framing, CRC, and parsing. No hardware dependencies. |
-| **Devices** | `usb2517` | I2C device drivers for specific ICs. Use the generic I2C driver. |
-| **Application** | `command`, `main` | Command dispatch and system orchestration. |
+| **BSP** | `Bsp.h/c` | Hardware configuration data — pins, clocks, addresses. Only file that changes when porting to a different PCB. |
+| **Drivers** | `i2c_driver`, `Usart_Driver`, `spi_driver`, `Clock_Config` | Reusable peripheral drivers. Operate on handle pointers, contain no board-specific constants. |
+| **Protocol** | `crc16`, `Packet_Protocol` | Transport-agnostic framing, CRC, and parsing. No hardware dependencies. |
+| **Devices** | `USB2517`, `DRV8702`, `VN5T016AH`, `DAC80508`, `ADS7066` | IC-specific drivers. USB2517 uses I2C; DRV8702, DAC80508, and ADS7066 use shared SPI2; VN5T016AH uses GPIO only. |
+| **Application** | `Command`, `main` | Command dispatch, deferred task execution, and system orchestration. |
 
 See [docs/architecture.md](docs/architecture.md) for the full data flow diagram.
 
 ## Boot Sequence
 
-1. **MCU_Init()** — MPU, NVIC priority grouping, flash latency, SMPS + LDO VOS0
-2. **ClockTree_Init()** — HSE 12 MHz → PLL1 480 MHz SYSCLK, PLL2/PLL3 128 MHz peripherals
-3. **I2C_Driver_Init()** — I2C1 on PB7 (SDA) / PB8 (SCL), 400 kHz Fast Mode
-4. **USB2517_Init()** — Write hub config registers, send USB_ATTACH command
-5. **Protocol_ParserInit()** — Register packet callback
-6. **USART_Driver_Init()** — USART10 on PG11 (RX) / PG12 (TX), 115200 baud, DMA
-7. **USART_Driver_StartRx()** — Enable circular DMA reception
+| Step | Function | Description |
+|------|----------|-------------|
+| 1 | `MCU_Init()` | MPU, NVIC priority grouping, flash latency, SMPS + LDO VOS0 |
+| 2 | `ClockTree_Init()` | HSE 12 MHz → PLL1 480 MHz SYSCLK, PLL2/PLL3 128 MHz peripherals |
+| 2a | `LL_Init1msTick()` | SysTick at 1 ms, interrupt enabled |
+| 3 | `USB2517_SetStrapPins()` | PG0/PG1 driven low for SMBus config mode |
+| 4 | `I2C_Driver_Init()` | I2C1 on PB7 (SDA) / PB8 (SCL), 400 kHz Fast Mode |
+| 4a | GPIO PD0-PD6 | 7 chip-select lines configured as outputs, all driven HIGH |
+| 5 | `SPI_Init()` | SPI2 on PC2/PC3/PA9, 16 MHz SCK, 32-bit frames, Mode 0 |
+| 6 | `DRV8702_Init()` x3 | TEC H-bridge GPIO init + `DRV8702_Wake()` for all 3 instances |
+| 6a | `DAC80508_Init()` | DAC80508 8-ch DAC init (SPI2, nCS on PD2), error code `0x40` on failure |
+| 6b | `ADS7066_Init()` x3 | ADS7066 8-ch 16-bit ADC init (SPI2, nCS on PD5/PD4/PD3), error codes `0x50`–`0x52` on failure |
+| 6c | `LoadSwitch_Init()` x10 | VN5T016AH high-side load switches (GPIO enable), all OFF on init, error code `0x60` on failure |
+| 7 | `Protocol_ParserInit()` | Register `OnPacketReceived` callback |
+| 8 | `USART_Driver_Init()` | USART10 on PG11 (RX) / PG12 (TX), 115200 baud, DMA streams |
+| 9 | `USART_Driver_StartRx()` | Enable circular DMA reception (HT/TC/IDLE interrupts) |
+| Boot test | — | Sends a `0xDEAD` packet with `{0xAA, 0xBB, 0xCC}` payload |
+
+## Main Loop
+
+The main loop handles two deferred tasks that are too heavy or unsafe for ISR context:
+
+```c
+while (1) {
+    if (burst_request.pending)  →  Command_ExecuteBurstADC()   // 100x SPI reads
+    if (tx_request.pending)     →  USART_Driver_SendPacket()   // DMA TX
+}
+```
+
+ISR-context command handlers populate `tx_request` or `burst_request` and set `.pending = true`. The main loop performs the actual work.
 
 ## Communication Protocol
 
-The board communicates using a custom framed protocol over USART at 115200 baud:
+The board communicates using a custom framed protocol over USART at 115200 baud (8N1):
 
 ```
 [SOF] [MSG1] [MSG2] [LEN_HI] [LEN_LO] [CMD1] [CMD2] [PAYLOAD...] [CRC_HI] [CRC_LO] [EOF]
+ 0x02                                                                                   0x7E
 ```
 
 - **SOF:** `0x02`, **EOF:** `0x7E`, **ESC:** `0x2D`
@@ -140,28 +186,57 @@ The board communicates using a custom framed protocol over USART at 115200 baud:
 
 See [docs/packet_protocol.md](docs/packet_protocol.md) for the full specification.
 
+## Implemented Commands
+
+| Command | Code | Payload (Request) | Payload (Response) | Context |
+|---------|------|--------------------|--------------------|---------|
+| `CMD_PING` | `0xDEAD` | (ignored) | 8 bytes: `DE AD BE EF 01 02 03 04` | ISR → deferred TX |
+| `CMD_READ_ADC` | `0x0C01` | (none) | 4 bytes: 18-bit ADC result, LE | ISR → deferred TX |
+| `CMD_BURST_ADC` | `0x0C02` | (none) | 400 bytes: 100 x 4-byte LE samples | ISR → deferred burst + TX |
+| `CMD_LOAD_*` | `0x0C10`–`0x0C19` | 1 byte: 0x01=ON, 0x00=OFF (or empty for query) | 1 byte: state (0x01/0x00) | ISR → deferred TX |
+
+See [docs/command_reference.md](docs/command_reference.md) for detailed payload layouts.
+
+## Error Handling
+
+`Error_Handler(fault_code)` disables interrupts, writes the fault code to RTC backup register DR0 (survives reset), and halts.
+
+| Fault Code | Source |
+|------------|--------|
+| `0x01`–`0x08` | Clock tree (HSE, PLL1/2/3 timeouts) |
+| `0x10` | I2C1 init failure |
+| `0x11` | USART10 init failure |
+| `0x20` | SPI2 init failure |
+| `0x30`–`0x32` | DRV8702 instance 1/2/3 init failure |
+| `0x40` | DAC80508 init failure |
+| `0x50` | ADS7066 instance 1 init failure |
+| `0x51` | ADS7066 instance 2 init failure |
+| `0x52` | ADS7066 instance 3 init failure |
+| `0x60` | Load switch init failure |
+
 ## Adding a New Command
 
-1. Define the command code in `command.h`:
+1. Define the command code in `Command.h`:
    ```c
-   #define CMD_READ_ADC    CMD_CODE(0x10, 0x02)
+   #define CMD_SET_VOLTAGE    CMD_CODE(0x10, 0x01)
    ```
-2. Write a static handler in `command.c`:
+2. Write a static handler in `Command.c`:
    ```c
-   static void Command_HandleReadADC(USART_Handle *handle,
-                                     const PacketHeader *header,
-                                     const uint8_t *payload);
+   static void Command_HandleSetVoltage(USART_Handle *handle,
+                                        const PacketHeader *header,
+                                        const uint8_t *payload);
    ```
 3. Add a case to `Command_Dispatch()`:
    ```c
-   case CMD_READ_ADC:
-       Command_HandleReadADC(handle, header, payload);
+   case CMD_SET_VOLTAGE:
+       Command_HandleSetVoltage(handle, header, payload);
        break;
    ```
+4. **Important:** Never call `USART_Driver_SendPacket()` from the handler (ISR context). Set `tx_request.pending` and let the main loop transmit.
 
 ## Adding a New I2C Device
 
-1. Create `device_name.h` and `device_name.c` in the Devices section
+1. Create `device_name.h` and `device_name.c`
 2. Define the register map and I2C address in the header
 3. Write init/read/write functions that take an `I2C_Handle *`
 4. Add the init call to `SystemInit_Sequence()` in `main.c`

@@ -9,11 +9,13 @@
  * Initialization sequence:
  *   1. MCU_Init()            — MPU, SYSCFG, NVIC, flash latency, power
  *   2. ClockTree_Init()      — HSE, PLL1/2/3, bus prescalers
- *   3. I2C_Driver_Init()     — I2C1 on PB7/PB8, 400 kHz
- *   4. USB2517_Init()        — Configure USB hub, send USB_ATTACH
- *   5. Protocol_ParserInit() — Frame parser state machine
- *   6. USART_Driver_Init()   — GPIO, USART10, DMA streams (interrupt-driven)
- *   7. USART_Driver_StartRx()— Enable DMA HT/TC + USART IDLE interrupts
+ *   3. USB2517_SetStrapPins()— Assert CFG_SEL pins before hub exits reset
+ *   4. I2C_Driver_Init()     — I2C1 on PB7/PB8, 400 kHz
+ *   5. SPI_Init()            — SPI2 for LTC2338-18 ADC
+ *   6. DRV8702_Init() x3    — TEC H-bridge drivers (GPIO + SPI2 shared bus)
+ *   7. Protocol_ParserInit() — Frame parser state machine
+ *   8. USART_Driver_Init()   — GPIO, USART10, DMA streams (interrupt-driven)
+ *   9. USART_Driver_StartRx()— Enable DMA HT/TC + USART IDLE interrupts
  *
  * Runtime:
  *   All UART reception is interrupt-driven.  The main loop is free for
@@ -27,6 +29,10 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "command.h"
+#include "DRV8702.h"
+#include "DAC80508.h"
+#include "ADS7066.h"
+#include "VN5T016AH.h"
 #include <string.h>
 #include "stm32h7xx_ll_rtc.h"
 #include "spi_driver.h"
@@ -34,7 +40,10 @@
 static ProtocolParser usart10_parser;
 
 /* Deferred TX request — set by ISR, consumed by main loop */
-TxRequest tx_request = {0};
+TxRequest    tx_request    = {0};
+
+/* Deferred burst ADC request — set by ISR, consumed by main loop */
+BurstRequest burst_request = {0};
 
 /* Private function prototypes -----------------------------------------------*/
 static void SystemInit_Sequence(void);
@@ -54,6 +63,12 @@ int main(void)
      * Add other non-interrupt tasks here as the project grows. */
     while (1)
         {
+            /* Execute pending burst ADC read — too slow for ISR context */
+            if (burst_request.pending) {
+                burst_request.pending = false;
+                Command_ExecuteBurstADC();
+            }
+
             /* Consume pending TX outside of ISR context */
             if (tx_request.pending) {
                 tx_request.pending = false;
@@ -73,9 +88,13 @@ int main(void)
  * ========================================================================== */
 static void SystemInit_Sequence(void)
 {
-	InitResult i2c_result;
-	InitResult usart_result;
-	SPI_Status spi_result;
+    InitResult      i2c_result;
+    InitResult      usart_result;
+    SPI_Status      spi_result;
+    DRV8702_Status  drv_result;
+    DAC80508_Status dac_result;
+    ADS7066_Status      adc_result;
+    LoadSwitch_Status   lsw_result;
 
     /* Step 1: MCU core — MPU, flash latency, voltage scaling */
     MCU_Init();
@@ -98,59 +117,85 @@ static void SystemInit_Sequence(void)
     if (i2c_result != INIT_OK) {
         Error_Handler(0x10);
     }
-    /* Enable GPIOD clock */
-    LL_AHB4_GRP1_EnableClock(LL_AHB4_GRP1_PERIPH_GPIOD);
-
-    /* Configure PD0–PD6 as outputs */
-    LL_GPIO_InitTypeDef gpio = {0};
-
-    gpio.Pin        = LL_GPIO_PIN_0 |
-                      LL_GPIO_PIN_1 |
-                      LL_GPIO_PIN_2 |
-                      LL_GPIO_PIN_3 |
-                      LL_GPIO_PIN_4 |
-                      LL_GPIO_PIN_5 |
-                      LL_GPIO_PIN_6;
-
-    gpio.Mode       = LL_GPIO_MODE_OUTPUT;
-    gpio.Speed      = LL_GPIO_SPEED_FREQ_HIGH;
-    gpio.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
-    gpio.Pull       = LL_GPIO_PULL_NO;
-
-    LL_GPIO_Init(GPIOD, &gpio);
-
-    /* Force all chip selects HIGH */
-    LL_GPIO_SetOutputPin(GPIOD,
-                         LL_GPIO_PIN_0 |
-                         LL_GPIO_PIN_1 |
-                         LL_GPIO_PIN_2 |
-                         LL_GPIO_PIN_3 |
-                         LL_GPIO_PIN_4 |
-                         LL_GPIO_PIN_5 |
-                         LL_GPIO_PIN_6);
-    /* Step 4b: SPI2 initialization */
+    /* Step 5: SPI2 initialization */
     spi_result = SPI_Init(&spi2_handle);
     if (spi_result != SPI_OK) {
         Error_Handler(0x20);
     }
-    /* Step 5: USB2517I hub — write config registers and attach to USB host.
+
+    /* Step 6: DRV8702 TEC H-bridge drivers — GPIO init, safe defaults.
+     *         SPI2 must be initialised first (shared bus for register access).
+     *         Each instance starts with nSLEEP LOW (sleep) and EN LOW (off).
+     *         DRV8702_Wake() is called immediately to bring all three active. */
+    drv_result = DRV8702_Init(&drv8702_1_handle);
+    if (drv_result != DRV8702_OK) {
+        Error_Handler(0x30);
+    }
+    DRV8702_Wake(&drv8702_1_handle);
+
+    drv_result = DRV8702_Init(&drv8702_2_handle);
+    if (drv_result != DRV8702_OK) {
+        Error_Handler(0x31);
+    }
+    DRV8702_Wake(&drv8702_2_handle);
+
+    drv_result = DRV8702_Init(&drv8702_3_handle);
+    if (drv_result != DRV8702_OK) {
+        Error_Handler(0x32);
+    }
+    DRV8702_Wake(&drv8702_3_handle);
+
+    /* Step 6a: DAC80508 — 8-channel 16-bit DAC on SPI2.
+     *          nCS on PD2 (already driven HIGH by the bulk chip-select init).
+     *          SPI2 must be initialised first (shared bus). */
+    dac_result = DAC80508_Init(&dac80508_handle);
+    if (dac_result != DAC80508_OK) {
+        Error_Handler(0x40);
+    }
+
+    /* Step 6b: ADS7066 — 8-channel 16-bit ADC x3 on SPI2.
+     *          nCS on PD5 (inst 1), PD4 (inst 2), PD3 (inst 3).
+     *          SPI2 must be initialised first (shared bus). */
+    adc_result = ADS7066_Init(&ads7066_1_handle);
+    if (adc_result != ADS7066_OK) {
+        Error_Handler(0x50);
+    }
+
+    adc_result = ADS7066_Init(&ads7066_2_handle);
+    if (adc_result != ADS7066_OK) {
+        Error_Handler(0x51);
+    }
+
+    adc_result = ADS7066_Init(&ads7066_3_handle);
+    if (adc_result != ADS7066_OK) {
+        Error_Handler(0x52);
+    }
+
+    /* Step 6c: Load switches — 10x VN5T016AH high-side drivers.
+     *          All enable pins default OFF (LOW) after init. */
+    lsw_result = LoadSwitch_Init();
+    if (lsw_result != LOADSW_OK) {
+        Error_Handler(0x60);
+    }
+
+    /* Step 7: USB2517I hub — write config registers and attach to USB host.
      *         Must complete before the FT231 COM port will enumerate. */
 //    result = USB2517_Init(&i2c1_handle);
 //    if (result != INIT_OK) {
 //        Error_Handler();
 //    }
 
-    /* Step 5: Protocol parser — register the packet callback */
+    /* Step 8: Protocol parser — register the packet callback */
     Protocol_ParserInit(&usart10_parser, OnPacketReceived, NULL);
 
-    /* Step 6: USART10 + DMA on PG11 (RX) / PG12 (TX)
-     *         Parser is passed to the driver so ISRs can feed it directly */
+    /* Step 8a: USART10 + DMA on PG11 (RX) / PG12 (TX)
+     *          Parser is passed to the driver so ISRs can feed it directly */
     usart_result = USART_Driver_Init(&usart10_handle, &usart10_parser);
     if (usart_result != INIT_OK) {
         Error_Handler(0x11);
     }
 
-    /* Step 7: Start interrupt-driven DMA reception */
+    /* Step 9: Start interrupt-driven DMA reception */
     USART_Driver_StartRx(&usart10_handle);
     /* === BOOT TEST — remove after debugging === */
     tx_request.msg1    = 0x01;
