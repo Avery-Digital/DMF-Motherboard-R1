@@ -1,16 +1,21 @@
 /*******************************************************************************
  * @file    Src/usb2517.c
  * @author  Cam
- * @brief   USB2517I USB Hub Controller — I2C Configuration Driver
+ * @brief   USB2517I USB Hub Controller — SMBus Configuration Driver
  *
- *          Writes default configuration and issues USB_ATTACH over I2C.
+ *          The USB2517I in SMBus slave mode (CFG_SEL[2:1:0] = 0,0,1) waits
+ *          indefinitely for the MCU to write configuration registers and
+ *          issue USB_ATTACH before connecting to the upstream USB host.
  *
- *          The USB2517I uses SMBus Write Block protocol.  Each register
- *          write is: [reg_addr] [byte_count] [data...].  However, for
- *          single-byte registers the byte count is 1 and we can use the
- *          standard I2C register write pattern.
+ *          IMPORTANT: In SMBus mode, all registers POR to 0x00 — NOT to the
+ *          internal defaults shown in Table 7-1.  Every register that needs
+ *          a non-zero value MUST be explicitly written.
  *
- *          Reference: USB2517 datasheet, Section 3.0 "SMBus Configuration"
+ *          SMBus Write Block protocol:
+ *            [START] [slave_addr+W] [reg_addr] [byte_count] [data...] [STOP]
+ *          For single-byte registers: byte_count = 1.
+ *
+ *          Reference: USB2517/USB2517I datasheet (DS00001598C)
  *******************************************************************************
  * Copyright (c) 2026
  * All rights reserved.
@@ -22,12 +27,12 @@
 /* ==========================================================================
  *  DEFAULT CONFIGURATION
  *
- *  These are the USB2517I factory defaults.  Writing them explicitly
- *  ensures the hub is in a known state regardless of previous partial
- *  configurations or brown-out conditions.
+ *  These match the USB2517I "Internal Default ROM" column from Table 7-1.
+ *  In SMBus mode the POR values are all 0x00, so we must write every
+ *  register that needs a non-zero value.
  *
- *  Modify these values if you need to change hub behavior (e.g. disable
- *  specific ports, change power switching, etc.)
+ *  Registers with internal default = 0x00 are omitted (writes would be
+ *  redundant since SMBus POR is already 0x00).
  * ========================================================================== */
 
 typedef struct {
@@ -44,31 +49,36 @@ static const USB2517_RegPair usb2517_defaults[] = {
     { USB2517_REG_PID_LSB,      0x17 },
     { USB2517_REG_PID_MSB,      0x25 },
 
-    /* Device ID: 0x0000 */
-    { USB2517_REG_DID_LSB,      0x00 },
-    { USB2517_REG_DID_MSB,      0x00 },
+    /* Config Data Byte 1: 0x9B
+     *   Bit 7:   Self-powered = 1
+     *   Bit 4:   High-speed capable = 1
+     *   Bit 3:   MTT enable = 1
+     *   Bit 1:   Individual port power switching = 1
+     *   Bit 0:   Individual overcurrent sensing = 1 */
+    { USB2517_REG_CFG1,         0x9B },
 
-    /* Hub Configuration 1: 0x9B (default)
-     *   Bit 7:   Self-powered
-     *   Bit 4:   High-speed capable
-     *   Bit 3:   MTT enable
-     *   Bit 1:   Individual port power switching
-     *   Bit 0:   Individual overcurrent sensing */
-    { USB2517_REG_HUB_CFG1,     0x9B },
-
-    /* Hub Configuration 2: 0x20 (default)
+    /* Config Data Byte 2: 0x20
      *   Compound device = 0, OC timer = default */
-    { USB2517_REG_HUB_CFG2,     0x20 },
+    { USB2517_REG_CFG2,         0x20 },
 
-    /* Hub Configuration 3: 0x02 (default)
-     *   String support disabled, port indicator disabled */
-    { USB2517_REG_HUB_CFG3,     0x02 },
+    /* Config Data Byte 3: 0x00 — string support disabled, port indicator off
+     * (SMBus POR is already 0x00, but write explicitly for clarity) */
+    { USB2517_REG_CFG3,         0x00 },
 
-    /* Port Swap: 0x00 — no port swapping */
-    { USB2517_REG_PORT_SWAP,    0x00 },
+    /* Max Power Self: 0x01 (2 mA units → 2 mA hub controller consumption) */
+    { USB2517_REG_MAXPS,        0x01 },
 
-    /* Port Disable: 0x00 — all ports enabled */
-    { USB2517_REG_PORT_DIS,     0x00 },
+    /* Max Power Bus: 0x32 (2 mA units → 100 mA, required for bus-powered) */
+    { USB2517_REG_MAXPB,        0x32 },
+
+    /* Hub Controller Max Current Self: 0x01 (2 mA units → 2 mA) */
+    { USB2517_REG_HCMCS,        0x01 },
+
+    /* Hub Controller Max Current Bus: 0x32 (2 mA units → 100 mA) */
+    { USB2517_REG_HCMCB,        0x32 },
+
+    /* Power-on Time: 0x32 (2 ms units → 100 ms port power stabilization) */
+    { USB2517_REG_PWRT,         0x32 },
 };
 
 #define USB2517_NUM_DEFAULTS \
@@ -77,27 +87,25 @@ static const USB2517_RegPair usb2517_defaults[] = {
 /* ==========================================================================
  *  PRIVATE: Write a single register via SMBus Write Block
  *
- *  SMBus Write Block format:
- *    [START] [addr+W] [reg] [byte_count=1] [value] [STOP]
+ *  SMBus Write Block format (Figure 7-1 in datasheet):
+ *    [START] [0x2C+W] [reg_addr] [byte_count=1] [value] [STOP]
  *
- *  This is slightly different from a standard I2C register write because
- *  of the byte_count field.  We send it as a 2-byte data payload using
- *  the raw I2C write with reg_addr.
+ *  Implemented using I2C_Driver_WriteReg with a 2-byte payload:
+ *    byte 0 = count (always 1 for single-register writes)
+ *    byte 1 = register value
  * ========================================================================== */
 static InitResult USB2517_WriteReg(I2C_Handle *i2c, uint8_t reg, uint8_t val)
 {
-    /* SMBus block write: [reg_addr] [count=1] [value] */
     uint8_t data[2] = { 0x01, val };
-
     return I2C_Driver_WriteReg(i2c, USB2517_I2C_ADDR, reg, data, 2);
 }
 
 /* ==========================================================================
  *  USB2517_SetStrapPins
  *
- *  Drives CFG_SEL1 (PG1) and CFG_SEL2 (PG0) low to select SMBus
- *  configuration mode.  CFG_SEL0 is the SCL line which idles high
- *  via pull-ups, giving CFG_SEL[2:1:0] = 0,0,1 = SMBus mode.
+ *  Drives CFG_SEL1 (PG1) and CFG_SEL2 (PG0) LOW to select SMBus
+ *  configuration mode.  CFG_SEL0 is the SCL line which idles HIGH
+ *  via pull-ups, giving CFG_SEL[2:1:0] = 0,0,1 = SMBus slave mode.
  *
  *  Call this as early as possible in the boot sequence — ideally
  *  before or immediately after the hub exits power-on reset.
@@ -108,30 +116,26 @@ void USB2517_SetStrapPins(void)
     Pin_Init(&usb2517_cfg_sel1_pin);
     Pin_Init(&usb2517_cfg_sel2_pin);
 
-    /* Drive both low: CFG_SEL1 = 0, CFG_SEL2 = 0 */
-    LL_GPIO_ResetOutputPin(usb2517_cfg_sel1_pin.port, usb2517_cfg_sel1_pin.pin);
-    LL_GPIO_SetOutputPin(usb2517_cfg_sel2_pin.port, usb2517_cfg_sel2_pin.pin);
+    /* Drive BOTH low for SMBus mode: CFG_SEL1 = 0, CFG_SEL2 = 0 */
+    LL_GPIO_ResetOutputPin(usb2517_cfg_sel1_pin.port, usb2517_cfg_sel1_pin.pin);   /* PG1 LOW */
+    LL_GPIO_ResetOutputPin(usb2517_cfg_sel2_pin.port, usb2517_cfg_sel2_pin.pin);   /* PG0 LOW */
 }
 
 /* ==========================================================================
  *  USB2517_Init
  *
- *  Asserts strapping pins, writes all default configuration registers,
- *  then sends USB_ATTACH.  After USB_ATTACH, the hub connects to the
- *  upstream USB host and downstream devices (FT231, etc.) become
- *  visible to the PC.
+ *  Writes all default configuration registers via SMBus, then sends
+ *  USB_ATTACH.  After USB_ATTACH, the hub connects to the upstream
+ *  USB host and downstream devices (FT231, etc.) become visible.
+ *
+ *  Timing (from datasheet Table 7-8, SMBus mode):
+ *    t2 = 500 µs hub recovery after RESET_N
+ *    t3 = SMBus code load (host-determined, no max for self-powered)
+ *    t4 = 100 ms USB attach
  * ========================================================================== */
 InitResult USB2517_Init(I2C_Handle *i2c)
 {
     InitResult result;
-
-    /* Assert strapping pins for SMBus mode */
-    USB2517_SetStrapPins();
-
-    /* Allow hub time to sample strapping pins after reset.
-     * The hub needs to see stable levels on CFG_SEL pins
-     * when RESET_N is released. */
-    for (volatile uint32_t d = 0; d < 100000; d++) { __NOP(); }
 
     /* Write all configuration registers */
     for (uint32_t i = 0; i < USB2517_NUM_DEFAULTS; i++) {
@@ -142,12 +146,14 @@ InitResult USB2517_Init(I2C_Handle *i2c)
             return result;
         }
 
-        /* Small delay between writes — some hubs need this */
+        /* Small delay between writes — SMBus spec compliance */
         for (volatile uint32_t d = 0; d < 1000; d++) { __NOP(); }
     }
 
-    /* Send USB_ATTACH command: register 0xFF, value 0x01 */
-    result = USB2517_WriteReg(i2c, USB2517_REG_USB_ATTACH, 0x01);
+    /* Send USB_ATTACH command: register 0xFF, bit 0 = 1
+     * This causes the hub to attach to the upstream USB host.
+     * After this write, the SMBus registers become write-protected. */
+    result = USB2517_WriteReg(i2c, USB2517_REG_STCD, 0x01);
 
     return result;
 }

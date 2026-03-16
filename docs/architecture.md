@@ -12,7 +12,7 @@
 │   │ Sequence │        │ CMD_PING  0xDEAD │          │
 │   │ Main Loop│        │ CMD_READ_ADC     │          │
 │   │ (deferred│        │ CMD_BURST_ADC    │          │
-│   │  TX +    │        │ (add more here)  │          │
+│   │  TX +    │        │ CMD_LOAD_* x10   │          │
 │   │  burst)  │        └──────────────────┘          │
 │   └──────────┘                                      │
 ├─────────────────────────────────────────────────────┤
@@ -98,7 +98,8 @@
 │   │  spi2_cfg/hdl    │   ll_tick.c                  │
 │   │  i2c1_cfg/hdl    │   ┌──────────────────┐       │
 │   │  drv8702_x_cfg   │   │ LL_IncTick       │       │
-│   │  drv8702_x_hdl   │   │ LL_GetTick       │       │
+│   │  dac80508_cfg    │   │ LL_GetTick       │       │
+│   │  ads7066_x_cfg   │                              │
 │   │ DMA buffers      │   └──────────────────┘       │
 │   │ Pin_Init()       │                              │
 │   └──────────────────┘                              │
@@ -265,7 +266,7 @@ MCU Boot
 I2C_Driver_Init()
     │ Configures I2C1 on PB7 (SDA) / PB8 (SCL), 400 kHz
     ▼
-USB2517_Init()                        ← currently disabled in main.c
+USB2517_Init()                        ← configures hub + sends USB_ATTACH
     │ Writes default config registers (VID, PID, hub config, port config)
     │ Sends USB_ATTACH command (reg 0xFF = 0x01)
     ▼

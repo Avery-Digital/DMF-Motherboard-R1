@@ -116,6 +116,9 @@ J-Link> g
 │   ├── command_reference.md    Command codes, payloads, and responses
 │   ├── spi_adc.md              SPI2 driver and LTC2338-18 ADC details
 │   ├── drv8702.md              DRV8702 TEC H-bridge driver details
+│   ├── dac80508.md             DAC80508 8-ch DAC driver details
+│   ├── ads7066.md              ADS7066 8-ch slow ADC driver details
+│   ├── load_switches.md        VN5T016AH load switch instances and API
 │   ├── clock_config.md         Clock tree details and PLL math
 │   ├── pin_assignments.md      MCU pin mapping (all peripherals)
 │   └── i2c_devices.md          I2C bus device table
@@ -144,14 +147,14 @@ See [docs/architecture.md](docs/architecture.md) for the full data flow diagram.
 | 1 | `MCU_Init()` | MPU, NVIC priority grouping, flash latency, SMPS + LDO VOS0 |
 | 2 | `ClockTree_Init()` | HSE 12 MHz → PLL1 480 MHz SYSCLK, PLL2/PLL3 128 MHz peripherals |
 | 2a | `LL_Init1msTick()` | SysTick at 1 ms, interrupt enabled |
-| 3 | `USB2517_SetStrapPins()` | PG0/PG1 driven low for SMBus config mode |
+| 3 | `USB2517_SetStrapPins()` | PG0 driven LOW, PG1 driven LOW for SMBus config mode |
 | 4 | `I2C_Driver_Init()` | I2C1 on PB7 (SDA) / PB8 (SCL), 400 kHz Fast Mode |
-| 4a | GPIO PD0-PD6 | 7 chip-select lines configured as outputs, all driven HIGH |
 | 5 | `SPI_Init()` | SPI2 on PC2/PC3/PA9, 16 MHz SCK, 32-bit frames, Mode 0 |
 | 6 | `DRV8702_Init()` x3 | TEC H-bridge GPIO init + `DRV8702_Wake()` for all 3 instances |
 | 6a | `DAC80508_Init()` | DAC80508 8-ch DAC init (SPI2, nCS on PD2), error code `0x40` on failure |
 | 6b | `ADS7066_Init()` x3 | ADS7066 8-ch 16-bit ADC init (SPI2, nCS on PD5/PD4/PD3), error codes `0x50`–`0x52` on failure |
 | 6c | `LoadSwitch_Init()` x10 | VN5T016AH high-side load switches (GPIO enable), all OFF on init, error code `0x60` on failure |
+| 6d | `USB2517_Init()` | USB2517I hub I2C config + USB_ATTACH, error code `0x70` on failure |
 | 7 | `Protocol_ParserInit()` | Register `OnPacketReceived` callback |
 | 8 | `USART_Driver_Init()` | USART10 on PG11 (RX) / PG12 (TX), 115200 baud, DMA streams |
 | 9 | `USART_Driver_StartRx()` | Enable circular DMA reception (HT/TC/IDLE interrupts) |
@@ -213,6 +216,7 @@ See [docs/command_reference.md](docs/command_reference.md) for detailed payload 
 | `0x51` | ADS7066 instance 2 init failure |
 | `0x52` | ADS7066 instance 3 init failure |
 | `0x60` | Load switch init failure |
+| `0x70` | USB2517I hub init failure |
 
 ## Adding a New Command
 

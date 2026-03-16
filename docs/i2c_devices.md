@@ -44,7 +44,9 @@ This is handled by the `USB2517_WriteReg()` function in `usb2517.c`.
 
 ### Register Map (Configured Registers)
 
-| Register | Address | Default | Description |
+**Note:** In SMBus configuration mode, ALL registers POR to 0x00 (not the internal defaults from datasheet Table 7-1). The MCU must write every required register explicitly.
+
+| Register | Address | Value Written | Description |
 |----------|---------|---------|-------------|
 | VID_LSB | 0x00 | 0x24 | Vendor ID low byte (Microchip/SMSC) |
 | VID_MSB | 0x01 | 0x04 | Vendor ID high byte |
@@ -55,9 +57,14 @@ This is handled by the `USB2517_WriteReg()` function in `usb2517.c`.
 | HUB_CFG1 | 0x06 | 0x9B | Self-powered, HS capable, MTT, individual port power/OC |
 | HUB_CFG2 | 0x07 | 0x20 | Compound device = 0, OC timer default |
 | HUB_CFG3 | 0x08 | 0x02 | String support disabled, port indicators disabled |
-| PORT_SWAP | 0x30 | 0x00 | No port swapping |
-| PORT_DIS | 0x31 | 0x00 | All 7 ports enabled |
-| USB_ATTACH | 0xFF | — | Write 0x01 to connect hub to upstream USB host |
+| MAXPS | 0x0C | 0x01 | Max power (self-powered) |
+| MAXPB | 0x0D | 0x32 | Max power (bus-powered) |
+| HCMCS | 0x0E | 0x01 | Hub current (self-powered) |
+| HCMCB | 0x0F | 0x32 | Hub current (bus-powered) |
+| PWRT | 0x10 | 0x32 | Power-on time (100 ms units) |
+| PORT_SWAP | 0xFA | 0x00 | No port swapping |
+| Port Disable Self | 0x0A | 0x00 | All 7 ports enabled (self-powered) |
+| USB_ATTACH | 0xFF (REG_STCD) | — | Write 0x01 to bit 0 to connect hub to upstream USB host |
 
 ### HUB_CFG1 (0x06) Bit Definitions
 

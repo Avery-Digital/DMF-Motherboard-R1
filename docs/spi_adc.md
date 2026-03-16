@@ -2,7 +2,7 @@
 
 ## Overview
 
-SPI2 is configured as a master in Mode 0 (CPOL=0, CPHA=0) with 32-bit frames for reading the LTC2338-18 18-bit SAR ADC. The SPI bus is **shared** with the DRV8702 TEC drivers, which temporarily reconfigure it to 16-bit frames during register access.
+SPI2 is configured as a master in Mode 0 (CPOL=0, CPHA=0) with 32-bit frames for reading the LTC2338-18 18-bit SAR ADC. The SPI bus is **shared** with the DRV8702 TEC drivers, DAC80508 DAC, and ADS7066 ADCs, which temporarily reconfigure it to 16-bit frames during register access.
 
 ## SPI2 Configuration
 
@@ -86,7 +86,7 @@ typedef enum {
 
 Timeouts are configured at 5 ms (`busy_timeout_ms` and `xfer_timeout_ms` in `SPI_Config`). At 16 MHz SCK and ~1 µs conversion, 5 ms is extremely conservative.
 
-## SPI Bus Sharing with DRV8702 and DAC80508
+## SPI Bus Sharing
 
 SPI2 is shared between three devices, each requiring different frame sizes and modes:
 
@@ -123,7 +123,7 @@ The DAC80508 driver uses the same reconfigure pattern, additionally switching CP
 
 ## Chip Select Lines
 
-Seven chip-select lines on GPIOD (PD0–PD6) are initialized as outputs and driven HIGH in `SystemInit_Sequence()`:
+Seven chip-select lines on GPIOD (PD0–PD6) are configured by each device driver's Init() function and driven HIGH (deasserted):
 
 | Pin | Assigned To |
 |-----|-------------|

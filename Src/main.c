@@ -7,15 +7,20 @@
  * All rights reserved.
  *
  * Initialization sequence:
- *   1. MCU_Init()            — MPU, SYSCFG, NVIC, flash latency, power
- *   2. ClockTree_Init()      — HSE, PLL1/2/3, bus prescalers
- *   3. USB2517_SetStrapPins()— Assert CFG_SEL pins before hub exits reset
- *   4. I2C_Driver_Init()     — I2C1 on PB7/PB8, 400 kHz
- *   5. SPI_Init()            — SPI2 for LTC2338-18 ADC
- *   6. DRV8702_Init() x3    — TEC H-bridge drivers (GPIO + SPI2 shared bus)
- *   7. Protocol_ParserInit() — Frame parser state machine
- *   8. USART_Driver_Init()   — GPIO, USART10, DMA streams (interrupt-driven)
- *   9. USART_Driver_StartRx()— Enable DMA HT/TC + USART IDLE interrupts
+ *   1.  MCU_Init()            — MPU, SYSCFG, NVIC, flash latency, power
+ *   2.  ClockTree_Init()      — HSE, PLL1/2/3, bus prescalers
+ *   2a. SysTick 1 ms          — LL_Init1msTick + LL_SYSTICK_EnableIT
+ *   3.  USB2517_SetStrapPins()— Assert CFG_SEL pins before hub exits reset
+ *   4.  I2C_Driver_Init()     — I2C1 on PB7/PB8, 400 kHz
+ *   5.  SPI_Init()            — SPI2 for LTC2338-18 ADC (shared bus)
+ *   6.  DRV8702_Init() x3    — TEC H-bridge drivers (GPIO + SPI2)
+ *   6a. DAC80508_Init()       — 8-ch 16-bit DAC (SPI2, nCS PD2)
+ *   6b. ADS7066_Init() x3    — 8-ch 16-bit ADC (SPI2, nCS PD5/PD4/PD3)
+ *   6c. LoadSwitch_Init()     — 10x VN5T016AH high-side load switches (GPIO)
+ *   7.  USB2517_Init()        — USB hub SMBus config + USB_ATTACH
+ *   8.  Protocol_ParserInit() — Frame parser state machine
+ *   8.  USART_Driver_Init()   — GPIO, USART10, DMA streams (interrupt-driven)
+ *   9.  USART_Driver_StartRx()— Enable DMA HT/TC + USART IDLE interrupts
  *
  * Runtime:
  *   All UART reception is interrupt-driven.  The main loop is free for
@@ -178,12 +183,14 @@ static void SystemInit_Sequence(void)
         Error_Handler(0x60);
     }
 
-    /* Step 7: USB2517I hub — write config registers and attach to USB host.
-     *         Must complete before the FT231 COM port will enumerate. */
-//    result = USB2517_Init(&i2c1_handle);
-//    if (result != INIT_OK) {
-//        Error_Handler();
-//    }
+    /* Step 7: USB2517I hub — write config registers via SMBus and attach
+     *         to the upstream USB host.  Must complete before the FT231
+     *         COM port will enumerate on the PC.
+     *         CFG_SEL[2:1:0] = 0,0,1 (SMBus slave mode) was set in Step 3. */
+    usart_result = USB2517_Init(&i2c1_handle);
+    if (usart_result != INIT_OK) {
+        Error_Handler(0x70);
+    }
 
     /* Step 8: Protocol parser — register the packet callback */
     Protocol_ParserInit(&usart10_parser, OnPacketReceived, NULL);

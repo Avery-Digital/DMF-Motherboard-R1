@@ -32,12 +32,13 @@ When updating code, keep these in sync:
 
 ## Datasheets
 
-Located at `../Datasheets/` (one level above the repo):
+Located at `Datasheets/` (in repo) and `../Datasheets/` (parent directory):
 - `ADC - ADS7066IRTER.pdf` — ADS7066 8-ch 16-bit ADC
 - `ADC - LTC2338IMS-18#PBF.pdf` — LTC2338-18 18-bit ADC
 - `DAC - DAC80508ZRTER.pdf` — DAC80508 8-ch 16-bit DAC
 - `MCU - STM32H735IGT6.pdf` — STM32H735 MCU
 - `TEC DRIVER - DRV8702DQRHBRQ1.pdf` — DRV8702 H-bridge driver
+- `POWER LOAD SWITCHES - VN5T016AHTR-E.pdf`
 
 ## Adding a New Command
 

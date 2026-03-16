@@ -428,10 +428,10 @@ SPI_Handle spi2_handle = {
  *  CFG_SEL1 (PG1, Pin 66) and CFG_SEL2 (PG0, Pin 63) must be driven
  *  LOW before the hub exits reset to select SMBus configuration mode.
  *
- *  CFG_SEL[2:1:0] = 0,0,1 → SMBus slave mode
- *    CFG_SEL0 = SCL line (idles high via pull-up) = 1
- *    CFG_SEL1 = PG1 driven low = 0
- *    CFG_SEL2 = PG0 driven low = 0
+ *  CFG_SEL[2:1:0] = 0,0,1 → SMBus slave mode (Table 5-2, DS00001598C)
+ *    CFG_SEL0 = SCL line (Pin 41, idles high via pull-up) = 1
+ *    CFG_SEL1 = PG1 (Pin 66) driven LOW = 0
+ *    CFG_SEL2 = PG0 (Pin 63) driven LOW = 0
  * ========================================================================== */
 const PinConfig usb2517_cfg_sel1_pin = {
     .clk        = LL_AHB4_GRP1_PERIPH_GPIOG,
