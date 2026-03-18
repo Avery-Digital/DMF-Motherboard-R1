@@ -433,6 +433,17 @@ SPI_Handle spi2_handle = {
  *    CFG_SEL1 = PG1 (Pin 66) driven LOW = 0
  *    CFG_SEL2 = PG0 (Pin 63) driven LOW = 0
  * ========================================================================== */
+const PinConfig usb2517_reset_n_pin = {
+    .clk        = LL_AHB4_GRP1_PERIPH_GPIOC,
+    .port       = GPIOC,
+    .pin        = LL_GPIO_PIN_13,
+    .mode       = LL_GPIO_MODE_OUTPUT,
+    .af         = 0U,
+    .speed      = LL_GPIO_SPEED_FREQ_LOW,
+    .pull       = LL_GPIO_PULL_NO,
+    .output     = LL_GPIO_OUTPUT_PUSHPULL,
+};
+
 const PinConfig usb2517_cfg_sel1_pin = {
     .clk        = LL_AHB4_GRP1_PERIPH_GPIOG,
     .port       = GPIOG,

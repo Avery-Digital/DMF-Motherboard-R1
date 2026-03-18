@@ -115,14 +115,15 @@ All configured as push-pull outputs, Low speed, initialized LOW (OFF).
 | 5 | PE6 | DAUGHTER_1 | Output | Push-pull, Low speed | Enable (active high) |
 | 97 | PD14 | DAUGHTER_2 | Output | Push-pull, Low speed | Enable (active high) |
 
-### USB2517I Strapping Pins
+### USB2517I Control and Strapping Pins
 
 | Pin # | Port.Pin | Function | Direction | Config | State |
 |-------|----------|----------|-----------|--------|-------|
-| 63 | PG0 | CFG_SEL2 | Output | Push-pull, Low speed | HIGH (set early in boot) |
-| 66 | PG1 | CFG_SEL1 | Output | Push-pull, Low speed | LOW (set early in boot) |
+| 9 | PC13 | RESET_N | Output | Push-pull, Low speed | Pulsed LOW during boot, then HIGH (release) |
+| 63 | PG0 | CFG_SEL2 | Output | Push-pull, Low speed | HIGH (set before reset release) |
+| 66 | PG1 | CFG_SEL1 | Output | Push-pull, Low speed | LOW (set before reset release) |
 
-CFG_SEL0 = SCL line (idles high via pull-up). Combined: CFG_SEL[2:1:0] = 1,0,1 → SMBus slave mode.
+CFG_SEL0 = SCL line (idles high via pull-up). Combined: CFG_SEL[2:1:0] = 1,0,1 → Internal default mode (dynamic power switching, LED=USB activity). No SMBus configuration required — hub uses internal defaults and attaches automatically after reset release.
 
 ### Clock Source
 
@@ -155,7 +156,7 @@ Refer to the STM32H735 datasheet Table 10 (Alternate Function mapping) for the c
 |------|---------------------|
 | GPIOA | SPI2_SCK (PA9) |
 | GPIOB | I2C1_SDA (PB7), I2C1_SCL (PB8) |
-| GPIOC | SPI2_MISO (PC2), SPI2_MOSI (PC3) |
+| GPIOC | SPI2_MISO (PC2), SPI2_MOSI (PC3), USB2517 RESET_N (PC13) |
 | GPIOD | Chip selects PD0-PD6 (DRV8702 x3, DAC80508, ADS7066 x3), VN5T016AH DAUGHTER_2 (PD14) |
 | GPIOE | ADC CNV (PE12), ADC BUSY (PE15), DRV8702 PH/EN (PE9/11/13/14), VN5T016AH (PE6/7/8/10) |
 | GPIOF | DRV8702 nSLEEP/MODE/nFAULT (PF0-2, PF12-14) |

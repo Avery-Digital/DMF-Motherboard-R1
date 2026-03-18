@@ -281,7 +281,7 @@ void Command_ExecuteBurstADC(void)
  *             query (no state change, just report current state).
  *
  *  Response payload (1 byte):
- *    Byte 0 — new state: 0x01 = ON, 0x00 = OFF
+ *    Byte 0 — new state: 0x01 = ON, 0x00 = OFF11
  * ========================================================================== */
 static void Command_HandleLoadSwitch(USART_Handle *handle,
                                      const PacketHeader *header,

@@ -32,7 +32,7 @@ When updating code, keep these in sync:
 
 ## Datasheets
 
-Located at `Datasheets/` (in repo) and `../Datasheets/` (parent directory):
+Located at `Datasheets/` (in repo root):
 - `ADC - ADS7066IRTER.pdf` — ADS7066 8-ch 16-bit ADC
 - `ADC - LTC2338IMS-18#PBF.pdf` — LTC2338-18 18-bit ADC
 - `DAC - DAC80508ZRTER.pdf` — DAC80508 8-ch 16-bit DAC

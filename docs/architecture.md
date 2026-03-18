@@ -45,12 +45,12 @@
 │                                                     │
 │   DRV8702.c                   usb2517.c             │
 │   ┌──────────────────┐       ┌──────────────────┐   │
-│   │ DRV8702_Init     │       │ USB2517_Init     │   │
-│   │ DRV8702_Wake     │       │ USB2517_IsPresent│   │
-│   │ DRV8702_TEC_Heat │       │ USB2517_SetStrap │   │
-│   │ DRV8702_TEC_Cool │       │   Pins           │   │
-│   │ DRV8702_TEC_Stop │       └──────────────────┘   │
-│   │ DRV8702_ReadReg  │        (uses i2c_driver)     │
+│   │ DRV8702_Init     │       │ USB2517_SetStrap │   │
+│   │ DRV8702_Wake     │       │   Pins           │   │
+│   │ DRV8702_TEC_Heat │       └──────────────────┘   │
+│   │ DRV8702_TEC_Cool │        (GPIO only — no I2C)  │
+│   │ DRV8702_TEC_Stop │                              │
+│   │ DRV8702_ReadReg  │                              │
 │   │ DRV8702_WriteReg │                              │
 │   └──────────────────┘                              │
 │    (uses GPIO + spi_driver)                         │
@@ -220,6 +220,7 @@ Main loop detects burst_request.pending
 Command_ExecuteBurstADC()             ← main loop context
     │ for i = 0..99:
     │   SPI_LTC2338_Read() → sample
+    │   burst_raw[i] = sample (debug array, visible in debugger)
     │   Pack as 4-byte LE at burst_payload[i*4]
     │   (0xFFFFFFFF sentinel on failure)
     ▼
@@ -260,18 +261,19 @@ DRV8702_ReadFaultStatus(handle)       ← optional SPI register read
 MCU Boot
     │
     ├── USB2517_SetStrapPins()
-    │     PG1 LOW, PG0 LOW → SMBus configuration mode
+    │     1. Hold RESET_N LOW (PC13)
+    │     2. Drive CFG_SEL2 HIGH (PG0), CFG_SEL1 LOW (PG1)
+    │        CFG_SEL0 = SCL (idles HIGH via pull-up)
+    │        CFG_SEL[2:1:0] = 1,0,1 → Internal default mode
+    │          (dynamic power switching, LED=USB activity)
+    │     3. Release RESET_N HIGH — hub exits POR
+    │
+    ├── LL_mDelay(100)  — wait for hub POR + attach
     │
     ▼
-I2C_Driver_Init()
-    │ Configures I2C1 on PB7 (SDA) / PB8 (SCL), 400 kHz
-    ▼
-USB2517_Init()                        ← configures hub + sends USB_ATTACH
-    │ Writes default config registers (VID, PID, hub config, port config)
-    │ Sends USB_ATTACH command (reg 0xFF = 0x01)
-    ▼
 USB2517I Hub
-    │ Enumerates on upstream USB port
+    │ Uses internal default register values (no SMBus config)
+    │ Attaches automatically to upstream USB port
     ▼
 FT231XQ
     │ Appears as COM port on host PC

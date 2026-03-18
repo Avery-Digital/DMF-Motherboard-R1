@@ -16,7 +16,7 @@ The system controls **3 TEC (thermoelectric cooler) H-bridges** and reads an **1
 | DAC | DAC80508ZRTER (8-ch 16-bit, SPI) |
 | TEC Drivers | DRV8702DQRHBRQ1 x3 (H-bridge, shared SPI + GPIO) |
 | Load Switches | VN5T016AHTR-E x10 (high-side, GPIO enable) |
-| USB Hub | USB2517I-JZX (I2C-configured, 7-port hub) |
+| USB Hub | USB2517I-JZX (GPIO-strapped, internal defaults, 7-port hub) |
 | USB-UART Bridge | FT231XQ-T |
 | Debug Interface | SWD (SWDIO, SWCLK, SWO) |
 
@@ -107,7 +107,7 @@ J-Link> g
 │   ├── crc16.c                 CRC-16 lookup table
 │   ├── Packet_Protocol.c       Frame state machine and packet builder
 │   ├── Command.c               Command dispatch + handlers
-│   ├── USB2517.c               USB2517I I2C config and attach
+│   ├── USB2517.c               USB2517I GPIO strapping and reset control
 │   ├── ll_tick.c               LL_IncTick / LL_GetTick implementation
 │   └── stm32h7xx_it.c          ISR handlers (SysTick, DMA, USART, faults)
 ├── docs/
@@ -135,7 +135,7 @@ The firmware uses a layered architecture with strict separation of concerns:
 | **BSP** | `Bsp.h/c` | Hardware configuration data — pins, clocks, addresses. Only file that changes when porting to a different PCB. |
 | **Drivers** | `i2c_driver`, `Usart_Driver`, `spi_driver`, `Clock_Config` | Reusable peripheral drivers. Operate on handle pointers, contain no board-specific constants. |
 | **Protocol** | `crc16`, `Packet_Protocol` | Transport-agnostic framing, CRC, and parsing. No hardware dependencies. |
-| **Devices** | `USB2517`, `DRV8702`, `VN5T016AH`, `DAC80508`, `ADS7066` | IC-specific drivers. USB2517 uses I2C; DRV8702, DAC80508, and ADS7066 use shared SPI2; VN5T016AH uses GPIO only. |
+| **Devices** | `USB2517`, `DRV8702`, `VN5T016AH`, `DAC80508`, `ADS7066` | IC-specific drivers. USB2517 uses GPIO strapping (no I2C); DRV8702, DAC80508, and ADS7066 use shared SPI2; VN5T016AH uses GPIO only. |
 | **Application** | `Command`, `main` | Command dispatch, deferred task execution, and system orchestration. |
 
 See [docs/architecture.md](docs/architecture.md) for the full data flow diagram.
@@ -147,17 +147,17 @@ See [docs/architecture.md](docs/architecture.md) for the full data flow diagram.
 | 1 | `MCU_Init()` | MPU, NVIC priority grouping, flash latency, SMPS + LDO VOS0 |
 | 2 | `ClockTree_Init()` | HSE 12 MHz → PLL1 480 MHz SYSCLK, PLL2/PLL3 128 MHz peripherals |
 | 2a | `LL_Init1msTick()` | SysTick at 1 ms, interrupt enabled |
-| 3 | `USB2517_SetStrapPins()` | PG0 driven LOW, PG1 driven LOW for SMBus config mode |
-| 4 | `I2C_Driver_Init()` | I2C1 on PB7 (SDA) / PB8 (SCL), 400 kHz Fast Mode |
-| 5 | `SPI_Init()` | SPI2 on PC2/PC3/PA9, 16 MHz SCK, 32-bit frames, Mode 0 |
-| 6 | `DRV8702_Init()` x3 | TEC H-bridge GPIO init + `DRV8702_Wake()` for all 3 instances |
-| 6a | `DAC80508_Init()` | DAC80508 8-ch DAC init (SPI2, nCS on PD2), error code `0x40` on failure |
-| 6b | `ADS7066_Init()` x3 | ADS7066 8-ch 16-bit ADC init (SPI2, nCS on PD5/PD4/PD3), error codes `0x50`–`0x52` on failure |
-| 6c | `LoadSwitch_Init()` x10 | VN5T016AH high-side load switches (GPIO enable), all OFF on init, error code `0x60` on failure |
-| 6d | `USB2517_Init()` | USB2517I hub I2C config + USB_ATTACH, error code `0x70` on failure |
+| 3 | `I2C_Driver_Init()` | I2C1 on PB7 (SDA) / PB8 (SCL), 400 kHz Fast Mode |
+| 4 | `SPI_Init()` | SPI2 on PC2/PC3/PA9, 16 MHz SCK, 32-bit frames, Mode 0 |
+| 5 | `DRV8702_Init()` x3 | TEC H-bridge GPIO init + `DRV8702_Wake()` for all 3 instances |
+| 5a | `DAC80508_Init()` | DAC80508 8-ch DAC init (SPI2, nCS on PD2), error code `0x40` on failure |
+| 5b | `ADS7066_Init()` x3 | ADS7066 8-ch 16-bit ADC init (SPI2, nCS on PD5/PD4/PD3), error codes `0x50`–`0x52` on failure |
+| 5c | `LoadSwitch_Init()` x10 | VN5T016AH high-side load switches (GPIO enable), all OFF on init, error code `0x60` on failure |
+| 6 | `USB2517_SetStrapPins()` | Assert RESET_N (PC13), drive CFG_SEL[2:1:0] = 1,0,1 for internal default mode, release reset. Hub attaches automatically — no SMBus config needed |
+| 6a | `LL_mDelay(100)` | Wait for USB2517 to exit POR and attach |
 | 7 | `Protocol_ParserInit()` | Register `OnPacketReceived` callback |
-| 8 | `USART_Driver_Init()` | USART10 on PG11 (RX) / PG12 (TX), 115200 baud, DMA streams |
-| 9 | `USART_Driver_StartRx()` | Enable circular DMA reception (HT/TC/IDLE interrupts) |
+| 7a | `USART_Driver_Init()` | USART10 on PG11 (RX) / PG12 (TX), 115200 baud, DMA streams |
+| 8 | `USART_Driver_StartRx()` | Enable circular DMA reception (HT/TC/IDLE interrupts) |
 | Boot test | — | Sends a `0xDEAD` packet with `{0xAA, 0xBB, 0xCC}` payload |
 
 ## Main Loop
@@ -216,7 +216,6 @@ See [docs/command_reference.md](docs/command_reference.md) for detailed payload 
 | `0x51` | ADS7066 instance 2 init failure |
 | `0x52` | ADS7066 instance 3 init failure |
 | `0x60` | Load switch init failure |
-| `0x70` | USB2517I hub init failure |
 
 ## Adding a New Command
 

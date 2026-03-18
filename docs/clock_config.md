@@ -124,7 +124,7 @@ The STM32H7 allows each peripheral to select its clock source independently from
 | Peripheral | Kernel Clock Source | Frequency | Notes |
 |------------|-------------------|-----------|-------|
 | USART10 | PLL2Q | 128 MHz | 115200 baud, 0.01% error |
-| SPI2 | PLL3P | 128 MHz | 16 MHz SCK (DIV8), LTC2338-18 + DRV8702 + DAC80508 + ADS7066 x3 |
+| SPI2 | PLL3P | 128 MHz | 16 MHz SCK (DIV8); LTC2338-18 + DRV8702 x3 + DAC80508 + ADS7066 x3 |
 | I2C1 | PLL3R | 128 MHz | 400 kHz Fast Mode |
 | ADC (future) | PLL2P | 128 MHz | Available but not yet used |
 

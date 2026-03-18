@@ -9,7 +9,7 @@ SPI2 is configured as a master in Mode 0 (CPOL=0, CPHA=0) with 32-bit frames for
 | Parameter | Value | Source |
 |-----------|-------|--------|
 | Peripheral | SPI2 |  |
-| Kernel clock | PLL3Q = 128 MHz | `LL_RCC_SetSPIClockSource(PLL3P)` |
+| Kernel clock | PLL3P = 128 MHz | `LL_RCC_SetSPIClockSource(LL_RCC_SPI123_CLKSOURCE_PLL3P)` |
 | Baud prescaler | DIV8 | 128 / 8 = **16 MHz SCK** |
 | Mode | 0 (CPOL=0, CPHA=0) | Clock idles LOW, data sampled on rising edge |
 | Data width | 32-bit | For LTC2338-18; DRV8702 switches to 16-bit |

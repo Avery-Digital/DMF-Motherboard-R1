@@ -97,6 +97,8 @@ Where `n` ranges from 0 to 99.
 1. **ISR stage** (`Command_HandleBurstADC`): Saves header fields to `burst_request`, sets `burst_request.pending = true`. Returns immediately.
 2. **Main loop stage** (`Command_ExecuteBurstADC`): Performs the 100 SPI reads, packs results into a static 400-byte buffer, copies to `tx_request`, sets `tx_request.pending = true`.
 
+**Debug support:** `Command_ExecuteBurstADC()` maintains a `static uint32_t burst_raw[100]` array that stores the raw ADC samples. This array is visible in the debugger for offline analysis without needing UART output.
+
 **Constants:**
 
 ```c

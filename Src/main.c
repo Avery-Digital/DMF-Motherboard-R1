@@ -50,6 +50,7 @@ TxRequest    tx_request    = {0};
 /* Deferred burst ADC request — set by ISR, consumed by main loop */
 BurstRequest burst_request = {0};
 
+
 /* Private function prototypes -----------------------------------------------*/
 static void SystemInit_Sequence(void);
 static void OnPacketReceived(const PacketHeader *header,
@@ -112,16 +113,14 @@ static void SystemInit_Sequence(void)
     LL_Init1msTick(sys_clk_config.sysclk_hz);
     LL_SYSTICK_EnableIT();          /* Enable SysTick interrupt → SysTick_Handler */
 
-    /* Step 3: Assert USB2517 strapping pins ASAP.
-     *         CFG_SEL1 and CFG_SEL2 must be low before the hub exits
-     *         power-on reset so it enters SMBus configuration mode. */
-    USB2517_SetStrapPins();
+
 
     /* Step 4: I2C1 on PB7 (SDA) / PB8 (SCL) */
     i2c_result = I2C_Driver_Init(&i2c1_handle);
     if (i2c_result != INIT_OK) {
         Error_Handler(0x10);
     }
+
     /* Step 5: SPI2 initialization */
     spi_result = SPI_Init(&spi2_handle);
     if (spi_result != SPI_OK) {
@@ -183,14 +182,11 @@ static void SystemInit_Sequence(void)
         Error_Handler(0x60);
     }
 
-    /* Step 7: USB2517I hub — write config registers via SMBus and attach
-     *         to the upstream USB host.  Must complete before the FT231
-     *         COM port will enumerate on the PC.
-     *         CFG_SEL[2:1:0] = 0,0,1 (SMBus slave mode) was set in Step 3. */
-    usart_result = USB2517_Init(&i2c1_handle);
-    if (usart_result != INIT_OK) {
-        Error_Handler(0x70);
-    }
+    /* Step 7: USB2517I hub — reset and strap for internal default mode.
+     *         CFG_SEL[2:1:0] = 1,0,1 → internal defaults, dynamic power, LED=USB.
+     *         No SMBus config needed — hub attaches automatically after POR. */
+    USB2517_SetStrapPins();
+    LL_mDelay(100);  /* Give USB2517 time to exit POR and attach */
 
     /* Step 8: Protocol parser — register the packet callback */
     Protocol_ParserInit(&usart10_parser, OnPacketReceived, NULL);

@@ -449,6 +449,7 @@ extern const I2C_Config         i2c1_cfg;
 extern I2C_Handle               i2c1_handle;
 
 /* USB2517I strapping pins */
+extern const PinConfig          usb2517_reset_n_pin;    /* PC13 — Pin 9  */
 extern const PinConfig          usb2517_cfg_sel1_pin;   /* PG1 — Pin 66 */
 extern const PinConfig          usb2517_cfg_sel2_pin;   /* PG0 — Pin 63 */
 

@@ -112,13 +112,24 @@ static InitResult USB2517_WriteReg(I2C_Handle *i2c, uint8_t reg, uint8_t val)
  * ========================================================================== */
 void USB2517_SetStrapPins(void)
 {
-    /* Initialize pins as push-pull outputs */
+    /* Initialize all three pins as push-pull outputs */
+    Pin_Init(&usb2517_reset_n_pin);
     Pin_Init(&usb2517_cfg_sel1_pin);
     Pin_Init(&usb2517_cfg_sel2_pin);
 
-    /* Drive BOTH low for SMBus mode: CFG_SEL1 = 0, CFG_SEL2 = 0 */
-    LL_GPIO_ResetOutputPin(usb2517_cfg_sel1_pin.port, usb2517_cfg_sel1_pin.pin);   /* PG1 LOW */
-    LL_GPIO_ResetOutputPin(usb2517_cfg_sel2_pin.port, usb2517_cfg_sel2_pin.pin);   /* PG0 LOW */
+    /* 1. Hold hub in reset so it doesn't sample strap pins yet */
+    LL_GPIO_ResetOutputPin(usb2517_reset_n_pin.port, usb2517_reset_n_pin.pin);     /* PC13 LOW — hold reset */
+
+    /* 2. Drive strap pins: CFG_SEL2 = 1, CFG_SEL1 = 0, CFG_SEL0 = SCL = 1
+     *    CFG_SEL[2:1:0] = 1,0,1 → Internal default, dynamic power, LED=USB */
+    LL_GPIO_ResetOutputPin(usb2517_cfg_sel1_pin.port, usb2517_cfg_sel1_pin.pin);   /* PG1 LOW  — CFG_SEL1 = 0 */
+    LL_GPIO_SetOutputPin(usb2517_cfg_sel2_pin.port, usb2517_cfg_sel2_pin.pin);     /* PG0 HIGH — CFG_SEL2 = 1 */
+
+    /* 3. Brief delay to ensure strap pins are stable before releasing reset */
+    for (volatile uint32_t d = 0; d < 5000; d++) { __NOP(); }
+
+    /* 4. Release reset — hub exits POR and samples CFG_SEL[2:1:0] = 0,0,1 */
+    LL_GPIO_SetOutputPin(usb2517_reset_n_pin.port, usb2517_reset_n_pin.pin);       /* PC13 HIGH — release */
 }
 
 /* ==========================================================================

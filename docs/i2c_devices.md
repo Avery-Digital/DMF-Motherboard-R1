@@ -14,9 +14,9 @@
 
 ## Device Address Table
 
-| Device | Part Number | 7-bit Address | 8-bit Write | 8-bit Read | Description |
-|--------|-------------|---------------|-------------|------------|-------------|
-| USB Hub | USB2517I-JZX | 0x2C | 0x58 | 0x59 | USB 2.0 7-port hub controller |
+| Device | Part Number | 7-bit Address | 8-bit Write | 8-bit Read | Description | Status |
+|--------|-------------|---------------|-------------|------------|-------------|--------|
+| USB Hub | USB2517I-JZX | 0x2C | 0x58 | 0x59 | USB 2.0 7-port hub controller | **Not used** — hub uses GPIO strapping (internal defaults), no SMBus config |
 
 ### Future Devices
 
@@ -30,71 +30,44 @@ As I2C slaves are added to the bus, document them here:
 
 ### Overview
 
-The USB2517I is a USB 2.0 hub controller that requires I2C (SMBus) configuration before it will attach to the upstream USB host. On power-up in SMBus mode, the hub waits for the MCU to write configuration registers and send the USB_ATTACH command.
+The USB2517I is a USB 2.0 hub controller. It is configured via **GPIO strapping pins** to use internal default register values. No SMBus/I2C configuration is required — the hub attaches automatically after reset release.
 
-### SMBus Write Format
+### Configuration Mode
 
-The USB2517I uses SMBus Write Block protocol, not standard I2C register writes. Each register write includes a byte count:
+The hub's configuration mode is selected by the CFG_SEL[2:1:0] strap pins sampled at power-on reset:
 
-```
-[START] [0x58 (addr+W)] [reg_addr] [byte_count=0x01] [value] [STOP]
-```
+| CFG_SEL2 (PG0) | CFG_SEL1 (PG1) | CFG_SEL0 (SCL) | Mode |
+|-----------------|-----------------|----------------|------|
+| **1 (HIGH)** | **0 (LOW)** | **1 (HIGH)** | **Internal default — dynamic power switching, LED=USB activity** |
 
-This is handled by the `USB2517_WriteReg()` function in `usb2517.c`.
-
-### Register Map (Configured Registers)
-
-**Note:** In SMBus configuration mode, ALL registers POR to 0x00 (not the internal defaults from datasheet Table 7-1). The MCU must write every required register explicitly.
-
-| Register | Address | Value Written | Description |
-|----------|---------|---------|-------------|
-| VID_LSB | 0x00 | 0x24 | Vendor ID low byte (Microchip/SMSC) |
-| VID_MSB | 0x01 | 0x04 | Vendor ID high byte |
-| PID_LSB | 0x02 | 0x17 | Product ID low byte |
-| PID_MSB | 0x03 | 0x25 | Product ID high byte |
-| DID_LSB | 0x04 | 0x00 | Device ID low byte |
-| DID_MSB | 0x05 | 0x00 | Device ID high byte |
-| HUB_CFG1 | 0x06 | 0x9B | Self-powered, HS capable, MTT, individual port power/OC |
-| HUB_CFG2 | 0x07 | 0x20 | Compound device = 0, OC timer default |
-| HUB_CFG3 | 0x08 | 0x02 | String support disabled, port indicators disabled |
-| MAXPS | 0x0C | 0x01 | Max power (self-powered) |
-| MAXPB | 0x0D | 0x32 | Max power (bus-powered) |
-| HCMCS | 0x0E | 0x01 | Hub current (self-powered) |
-| HCMCB | 0x0F | 0x32 | Hub current (bus-powered) |
-| PWRT | 0x10 | 0x32 | Power-on time (100 ms units) |
-| PORT_SWAP | 0xFA | 0x00 | No port swapping |
-| Port Disable Self | 0x0A | 0x00 | All 7 ports enabled (self-powered) |
-| USB_ATTACH | 0xFF (REG_STCD) | — | Write 0x01 to bit 0 to connect hub to upstream USB host |
-
-### HUB_CFG1 (0x06) Bit Definitions
-
-| Bit | Name | Default | Description |
-|-----|------|---------|-------------|
-| 7 | SELF_PWR | 1 | 1 = Self-powered, 0 = Bus-powered |
-| 6:5 | — | 0 | Reserved |
-| 4 | HS_DISABLE | 0 | 0 = High-speed enabled |
-| 3 | MTT_ENABLE | 1 | 1 = Multi-TT enabled (one TT per port) |
-| 2 | — | 0 | Reserved |
-| 1 | IND_PWR_SW | 1 | 1 = Individual port power switching |
-| 0 | IND_OC | 1 | 1 = Individual overcurrent sensing |
+The MCU drives these strap pins via `USB2517_SetStrapPins()` before releasing RESET_N (PC13, Pin 9).
 
 ### Initialization Sequence
 
-1. MCU boots, I2C1 initialized at 400 kHz
-2. `USB2517_IsPresent()` — verify hub ACKs at address 0x2C
-3. Write all config registers (VID through PORT_DIS) with default values
-4. Small delay between each register write (~1000 NOP cycles)
-5. Write `USB_ATTACH` register (0xFF) with value 0x01
-6. Hub connects to upstream USB host
-7. FT231XQ enumerates as COM port on host PC
+1. `USB2517_SetStrapPins()` — hold RESET_N LOW, drive CFG_SEL pins, release RESET_N
+2. `LL_mDelay(100)` — wait for hub to exit POR and attach
+3. Hub uses internal default register values (Table 7-1 in datasheet)
+4. Hub attaches to upstream USB host automatically
+5. FT231XQ enumerates as COM port on host PC
+
+### GPIO Pins
+
+| Pin # | Port.Pin | Function | Direction | State |
+|-------|----------|----------|-----------|-------|
+| 9 | PC13 | RESET_N | Output | Pulsed LOW, then HIGH |
+| 63 | PG0 | CFG_SEL2 | Output | HIGH |
+| 66 | PG1 | CFG_SEL1 | Output | LOW |
+
+### SMBus Address (Reference Only)
+
+The USB2517I SMBus slave address is 0x2C (7-bit). SMBus configuration is **not used** in the current firmware — the hub uses internal defaults. The `USB2517_Init()` SMBus write function and register table remain in the source code for reference but are not called during boot.
 
 ### Troubleshooting
 
 | Symptom | Likely Cause |
 |---------|-------------|
-| Hub not ACKing (IsPresent fails) | CFG_SEL pins misconfigured, hub not powered, I2C pull-ups missing |
-| Hub ACKs but no USB enumeration | USB_ATTACH not sent, USB cable issue, hub RESET pin held low |
-| Code 43 on Windows | Hub not configured before USB host polls it, or init sequence incomplete |
+| No USB enumeration | RESET_N stuck LOW, CFG_SEL pins wrong, USB cable issue |
+| Code 43 on Windows | Hub not released from reset before USB host polls |
 | COM port not appearing | FT231 issue (separate from hub), check FTDI VCP driver installation |
 
 ## Adding a New I2C Device
