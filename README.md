@@ -2,7 +2,7 @@
 
 Bare-metal embedded firmware for the **DMF Motherboard Rev 1** built around the **STM32H735IGT6** microcontroller. The board interfaces with a host PC over USB (via USB2517I hub + FT231XQ USB-UART bridge) using a custom framed serial protocol with CRC-16 integrity checking.
 
-The system controls **3 TEC (thermoelectric cooler) H-bridges** and reads an **18-bit ADC** for temperature/voltage sensing, all commanded remotely by a host PC.
+The system controls **3 TEC (thermoelectric cooler) H-bridges**, reads an **18-bit ADC** for temperature/voltage sensing, and **routes driverboard commands to up to 4 daughtercard boards** over dedicated UARTs, all commanded remotely by a host PC.
 
 ## Target Hardware
 
@@ -83,6 +83,7 @@ J-Link> g
 │   ├── Clock_Config.h          Clock init prototypes
 │   ├── i2c_driver.h            Generic I2C master driver
 │   ├── Usart_Driver.h          USART + DMA driver (interrupt-driven)
+│   ├── DC_Uart_Driver.h        Daughtercard UART driver (polled TX + DMA RX)
 │   ├── spi_driver.h            SPI2 driver for LTC2338-18 ADC
 │   ├── DRV8702.h               TEC H-bridge driver — register map and API
 │   ├── VN5T016AH.h             High-side load switch driver (10 instances)
@@ -99,6 +100,7 @@ J-Link> g
 │   ├── Clock_Config.c          MCU init, PLL1/2/3, bus prescalers
 │   ├── i2c_driver.c            Polled I2C1 master operations
 │   ├── Usart_Driver.c          USART10 + DMA TX/RX (interrupt-driven)
+│   ├── DC_Uart_Driver.c        Daughtercard UART driver (4 instances)
 │   ├── spi_driver.c            SPI2 init + LTC2338-18 polled read
 │   ├── DRV8702.c               DRV8702 GPIO control + SPI register access
 │   ├── VN5T016AH.c             Load switch enable/disable (GPIO only)
@@ -136,6 +138,7 @@ The firmware uses a layered architecture with strict separation of concerns:
 | **Drivers** | `i2c_driver`, `Usart_Driver`, `spi_driver`, `Clock_Config` | Reusable peripheral drivers. Operate on handle pointers, contain no board-specific constants. |
 | **Protocol** | `crc16`, `Packet_Protocol` | Transport-agnostic framing, CRC, and parsing. No hardware dependencies. |
 | **Devices** | `USB2517`, `DRV8702`, `VN5T016AH`, `DAC80508`, `ADS7066` | IC-specific drivers. USB2517 uses GPIO strapping (no I2C); DRV8702, DAC80508, and ADS7066 use shared SPI2; VN5T016AH uses GPIO only. |
+| **Daughtercard** | `DC_Uart_Driver` | Polled TX + DMA circular RX UART driver for 4 daughtercard interfaces (USART1, USART2, USART3, UART4). Routes driverboard commands by boardID. |
 | **Application** | `Command`, `main` | Command dispatch, deferred task execution, and system orchestration. |
 
 See [docs/architecture.md](docs/architecture.md) for the full data flow diagram.
@@ -158,20 +161,25 @@ See [docs/architecture.md](docs/architecture.md) for the full data flow diagram.
 | 7 | `Protocol_ParserInit()` | Register `OnPacketReceived` callback |
 | 7a | `USART_Driver_Init()` | USART10 on PG11 (RX) / PG12 (TX), 115200 baud, DMA streams |
 | 8 | `USART_Driver_StartRx()` | Enable circular DMA reception (HT/TC/IDLE interrupts) |
+| 9 | `Protocol_ParserInit()` x4 | Init dc1–dc4 parsers with `OnDC_PacketReceived` callback |
+| 9a | `DC_Uart_Init()` x4 | DC1 USART1, DC2 USART2, DC3 USART3, DC4 UART4 (error codes `0x12`–`0x15`) |
+| 9b | `DC_Uart_StartRx()` x4 | Enable DMA circular RX for all 4 daughtercard UARTs |
 | Boot test | — | Sends a `0xDEAD` packet with `{0xAA, 0xBB, 0xCC}` payload |
 
 ## Main Loop
 
-The main loop handles two deferred tasks that are too heavy or unsafe for ISR context:
+The main loop handles deferred tasks that are too heavy or unsafe for ISR context:
 
 ```c
 while (1) {
-    if (burst_request.pending)  →  Command_ExecuteBurstADC()   // 100x SPI reads
-    if (tx_request.pending)     →  USART_Driver_SendPacket()   // DMA TX
+    if (burst_request.pending)       →  Command_ExecuteBurstADC()         // 100x SPI reads
+    if (dc_forward_request.pending)  →  Forward packet to DC UART        // Daughtercard async routing
+    if (dc_list_request.pending)     →  Sequential SET/GET_LIST_OF_SW    // Synchronous bulk switch ops
+    if (tx_request.pending)          →  USART_Driver_SendPacket()         // DMA TX
 }
 ```
 
-ISR-context command handlers populate `tx_request` or `burst_request` and set `.pending = true`. The main loop performs the actual work.
+ISR-context command handlers populate `tx_request`, `burst_request`, `dc_forward_request`, or `dc_list_request` and set `.pending = true`. The main loop performs the actual work.
 
 ## Communication Protocol
 
@@ -197,6 +205,8 @@ See [docs/packet_protocol.md](docs/packet_protocol.md) for the full specificatio
 | `CMD_READ_ADC` | `0x0C01` | (none) | 4 bytes: 18-bit ADC result, LE | ISR → deferred TX |
 | `CMD_BURST_ADC` | `0x0C02` | (none) | 400 bytes: 100 x 4-byte LE samples | ISR → deferred burst + TX |
 | `CMD_LOAD_*` | `0x0C10`–`0x0C19` | 1 byte: 0x01=ON, 0x00=OFF (or empty for query) | 1 byte: state (0x01/0x00) | ISR → deferred TX |
+| `CMD_THERM1`–`CMD_THERM6` | `0x0C20`–`0x0C25` | (none) | 2 bytes: 16-bit ADC result, LE | ISR → deferred TX |
+| Routed DC commands (26) | `0x0Axx`, `0x0Bxx`, `0xBEEF` | boardID + command-specific | Relayed from daughtercard | ISR → deferred forward/list |
 
 See [docs/command_reference.md](docs/command_reference.md) for detailed payload layouts.
 
@@ -209,6 +219,10 @@ See [docs/command_reference.md](docs/command_reference.md) for detailed payload 
 | `0x01`–`0x08` | Clock tree (HSE, PLL1/2/3 timeouts) |
 | `0x10` | I2C1 init failure |
 | `0x11` | USART10 init failure |
+| `0x12` | DC1 USART1 init failure |
+| `0x13` | DC2 USART2 init failure |
+| `0x14` | DC3 USART3 init failure |
+| `0x15` | DC4 UART4 init failure |
 | `0x20` | SPI2 init failure |
 | `0x30`–`0x32` | DRV8702 instance 1/2/3 init failure |
 | `0x40` | DAC80508 init failure |

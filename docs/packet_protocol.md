@@ -68,6 +68,40 @@ Example: CMD1 = `0xDE`, CMD2 = `0xAD` → command = `0xDEAD`
 | `CMD_LOAD_ASSEMBLY` | `0x0C` | `0x17` | `0x0C17` | Load switch: Assembly station. |
 | `CMD_LOAD_DAUGHTER1` | `0x0C` | `0x18` | `0x0C18` | Load switch: Daughter board 1. |
 | `CMD_LOAD_DAUGHTER2` | `0x0C` | `0x19` | `0x0C19` | Load switch: Daughter board 2. |
+| `CMD_THERM1` | `0x0C` | `0x20` | `0x0C20` | Thermistor 1 (ADS7066 inst3 ch0) |
+| `CMD_THERM2` | `0x0C` | `0x21` | `0x0C21` | Thermistor 2 (ADS7066 inst3 ch1) |
+| `CMD_THERM3` | `0x0C` | `0x22` | `0x0C22` | Thermistor 3 (ADS7066 inst3 ch2) |
+| `CMD_THERM4` | `0x0C` | `0x23` | `0x0C23` | Thermistor 4 (ADS7066 inst3 ch3) |
+| `CMD_THERM5` | `0x0C` | `0x24` | `0x0C24` | Thermistor 5 (ADS7066 inst3 ch4) |
+| `CMD_THERM6` | `0x0C` | `0x25` | `0x0C25` | Thermistor 6 (ADS7066 inst3 ch5) |
+| `CMD_DC_DEBUG` | `0xBE` | `0xEF` | `0xBEEF` | Debug test loopback (routed to DC) |
+| `AllSwitchesFloat` | `0x0A` | `0x00` | `0x0A00` | Float all switches (routed to DC) |
+| `AllSwitchesToVIn1` | `0x0A` | `0x01` | `0x0A01` | All switches to HVSG (routed to DC) |
+| `AllSwitchesToVIn2` | `0x0A` | `0x02` | `0x0A02` | All switches to GND (routed to DC) |
+| `SetSingleSwitch` | `0x0A` | `0x10` | `0x0A10` | Set one switch (routed to DC) |
+| `GetSingleSwitch` | `0x0A` | `0x11` | `0x0A11` | Get one switch state (routed to DC) |
+| `PMUTurnCh0On` | `0x0A` | `0x50` | `0x0A50` | PMU ch0 on (routed to DC) |
+| `PMUTurnCh0Off` | `0x0A` | `0x51` | `0x0A51` | PMU ch0 off (routed to DC) |
+| `PMUTurnCh1On` | `0x0A` | `0x52` | `0x0A52` | PMU ch1 on (routed to DC) |
+| `PMUTurnCh1Off` | `0x0A` | `0x53` | `0x0A53` | PMU ch1 off (routed to DC) |
+| `EHVGSetPWMFreq` | `0x0A` | `0xC4` | `0x0AC4` | Set PWM frequency (routed to DC) |
+| `EHVGGetPWMFreq` | `0x0A` | `0xC5` | `0x0AC5` | Get PWM frequency (routed to DC) |
+| `EHVGSetPWMDC` | `0x0A` | `0xC6` | `0x0AC6` | Set PWM duty cycle (routed to DC) |
+| `EHVGGetPWMDC` | `0x0A` | `0xC7` | `0x0AC7` | Get PWM duty cycle (routed to DC) |
+| `EHVGTurnCh0On` | `0x0A` | `0xD0` | `0x0AD0` | HVSG ch0 on (routed to DC) |
+| `EHVGTurnCh0Off` | `0x0A` | `0xD1` | `0x0AD1` | HVSG ch0 off (routed to DC) |
+| `EHVGTurnCh1On` | `0x0A` | `0xD2` | `0x0AD2` | HVSG ch1 on (routed to DC) |
+| `EHVGTurnCh1Off` | `0x0A` | `0xD3` | `0x0AD3` | HVSG ch1 off (routed to DC) |
+| `EHVGSetVCh0` | `0x0A` | `0xD4` | `0x0AD4` | Set HVSG ch0 voltage (routed to DC) |
+| `EHVGGetVCh0` | `0x0A` | `0xD5` | `0x0AD5` | Get HVSG ch0 voltage (routed to DC) |
+| `EHVGSetVCh1` | `0x0A` | `0xD6` | `0x0AD6` | Set HVSG ch1 voltage (routed to DC) |
+| `EHVGGetVCh1` | `0x0A` | `0xD7` | `0x0AD7` | Get HVSG ch1 voltage (routed to DC) |
+| `GET_INA228_CH0` | `0x0B` | `0x01` | `0x0B01` | Read INA228 ch0 (routed to DC) |
+| `GET_INA228_CH1` | `0x0B` | `0x02` | `0x0B02` | Read INA228 ch1 (routed to DC) |
+| `SET_LIST_OF_SW` | `0x0B` | `0x51` | `0x0B51` | Bulk switch set (synchronous, routed to DC) |
+| `GET_LIST_OF_SW` | `0x0B` | `0x52` | `0x0B52` | Bulk switch get (synchronous, routed to DC) |
+| `GET_ALL_SW` | `0x0B` | `0x53` | `0x0B53` | Get all 600 switch states (routed to DC) |
+| `GET_BOARD_TYPE` | `0x0B` | `0x99` | `0x0B99` | Board identification (routed to DC) |
 
 See [command_reference.md](command_reference.md) for detailed payload layouts and response formats.
 
@@ -187,3 +221,19 @@ UART reception is fully interrupt-driven with zero polling:
 | USART10 IDLE | Line idle after last byte | Catch end-of-packet with low latency |
 
 All three ISRs call `USART_Driver_RxProcessISR()` which compares the DMA NDTR register to the last read position, extracts new bytes (handling ring wrap), and feeds them to `Protocol_FeedBytes()`.
+
+## Daughtercard UART Reception
+
+Each of the 4 daughtercard UARTs (USART1, USART2, USART3, UART4) uses the same DMA circular RX + HT/TC/IDLE interrupt architecture as USART10. Each has its own `ProtocolParser` instance initialized with an `OnDC_PacketReceived` callback.
+
+| Interrupt Source | Trigger | Purpose |
+|------------------|---------|---------|
+| DMA1 Stream 2/3/4/5 HT | Buffer 50% full | Process first half of DC ring buffer |
+| DMA1 Stream 2/3/4/5 TC | Buffer 100% full (wrap) | Process second half of DC ring buffer |
+| USART1/2/3/UART4 IDLE | Line idle after last byte | Catch end-of-packet with low latency |
+
+`OnDC_PacketReceived` operates in dual mode controlled by the `dc_list_active` flag:
+- **Normal mode:** Deposits the response into `tx_request` for relay back to the GUI via USART10.
+- **List mode:** Deposits the response into a `dc_response` mailbox, used by the synchronous SET/GET_LIST_OF_SW main-loop handler.
+
+DC UART TX is polled (no DMA) since outbound command packets are small and infrequent.

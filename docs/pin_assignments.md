@@ -9,6 +9,21 @@
 | 155 | PG11 | USART10_RX | AF4 | Input | Pull-up, Very High speed | FT231XQ TX |
 | 156 | PG12 | USART10_TX | AF4 | Output | Push-pull, Very High speed | FT231XQ RX |
 
+### Daughtercard UARTs (4 instances)
+
+| Pin # | Port.Pin | Function | AF | Direction | Config | Connected To |
+|-------|----------|----------|-----|-----------|--------|-------------|
+| — | PB14 | USART1_TX | AF4 | Output | Push-pull, Very High speed | DC1 (Connector 1 bottom) |
+| — | PB15 | USART1_RX | AF4 | Input | Pull-up, Very High speed | DC1 (Connector 1 bottom) |
+| — | PA2 | USART2_TX | AF7 | Output | Push-pull, Very High speed | DC2 (Connector 1 top) |
+| — | PA3 | USART2_RX | AF7 | Input | Pull-up, Very High speed | DC2 (Connector 1 top) |
+| — | PB10 | USART3_TX | AF7 | Output | Push-pull, Very High speed | DC3 (Connector 2 bottom) |
+| — | PB11 | USART3_RX | AF7 | Input | Pull-up, Very High speed | DC3 (Connector 2 bottom) |
+| — | PC10 | UART4_TX | AF8 | Output | Push-pull, Very High speed | DC4 (Connector 2 top) |
+| — | PC11 | UART4_RX | AF8 | Input | Pull-up, Very High speed | DC4 (Connector 2 top) |
+
+DMA assignments: DMA1 Stream 2 (DC1 RX), Stream 3 (DC2 RX), Stream 4 (DC3 RX), Stream 5 (DC4 RX). TX is polled.
+
 ### I2C1 — Peripheral Bus
 
 | Pin # | Port.Pin | Function | AF | Direction | Config | Connected To |
@@ -145,8 +160,10 @@ CFG_SEL0 = SCL line (idles high via pull-up). Combined: CFG_SEL[2:1:0] = 1,0,1 �
 
 | AF | Function |
 |----|----------|
-| AF4 | I2C1, USART10 |
+| AF4 | I2C1, USART10, USART1 |
 | AF5 | SPI2 |
+| AF7 | USART2, USART3 |
+| AF8 | UART4 |
 
 Refer to the STM32H735 datasheet Table 10 (Alternate Function mapping) for the complete list.
 
@@ -154,9 +171,9 @@ Refer to the STM32H735 datasheet Table 10 (Alternate Function mapping) for the c
 
 | Port | Peripherals Using It |
 |------|---------------------|
-| GPIOA | SPI2_SCK (PA9) |
-| GPIOB | I2C1_SDA (PB7), I2C1_SCL (PB8) |
-| GPIOC | SPI2_MISO (PC2), SPI2_MOSI (PC3), USB2517 RESET_N (PC13) |
+| GPIOA | SPI2_SCK (PA9), USART2_TX (PA2), USART2_RX (PA3) |
+| GPIOB | I2C1_SDA (PB7), I2C1_SCL (PB8), USART1_TX (PB14), USART1_RX (PB15), USART3_TX (PB10), USART3_RX (PB11) |
+| GPIOC | SPI2_MISO (PC2), SPI2_MOSI (PC3), USB2517 RESET_N (PC13), UART4_TX (PC10), UART4_RX (PC11) |
 | GPIOD | Chip selects PD0-PD6 (DRV8702 x3, DAC80508, ADS7066 x3), VN5T016AH DAUGHTER_2 (PD14) |
 | GPIOE | ADC CNV (PE12), ADC BUSY (PE15), DRV8702 PH/EN (PE9/11/13/14), VN5T016AH (PE6/7/8/10) |
 | GPIOF | DRV8702 nSLEEP/MODE/nFAULT (PF0-2, PF12-14) |

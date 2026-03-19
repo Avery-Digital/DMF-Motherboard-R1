@@ -13,8 +13,9 @@
 │   │ Main Loop│        │ CMD_READ_ADC     │          │
 │   │ (deferred│        │ CMD_BURST_ADC    │          │
 │   │  TX +    │        │ CMD_LOAD_* x10   │          │
-│   │  burst)  │        └──────────────────┘          │
-│   └──────────┘                                      │
+│   │  burst + │        │ CMD_THERM1-6     │          │
+│   │  DC fwd) │        │ DC routing (26)  │          │
+│   └──────────┘        └──────────────────┘          │
 ├─────────────────────────────────────────────────────┤
 │                      PROTOCOL                        │
 │                                                     │
@@ -40,6 +41,15 @@
 │   │   TxComplete │                  │   IsDevice │ │
 │   │    ISR       │                  │    Ready   │ │
 │   └──────────────┘                  └────────────┘ │
+│                                                     │
+│   dc_uart_driver.c                                  │
+│   ┌──────────────────┐                              │
+│   │ DC_Uart_Init     │  4 instances (USART1/2/3,   │
+│   │ DC_Uart_StartRx  │   UART4) — polled TX,       │
+│   │ DC_Uart_Send     │   DMA circular RX            │
+│   │ DC_Uart_RxProcess│  (HT/TC/IDLE interrupts)    │
+│   │    ISR           │                              │
+│   └──────────────────┘                              │
 ├─────────────────────────────────────────────────────┤
 │                      DEVICES                         │
 │                                                     │
@@ -95,6 +105,7 @@
 │   │ Const configs:   │   │ ClockTree_Init   │       │
 │   │  sys_clk_config  │   └──────────────────┘       │
 │   │  usart10_cfg/hdl │                              │
+│   │  dc1-4_cfg/hdl   │                              │
 │   │  spi2_cfg/hdl    │   ll_tick.c                  │
 │   │  i2c1_cfg/hdl    │   ┌──────────────────┐       │
 │   │  drv8702_x_cfg   │   │ LL_IncTick       │       │
@@ -281,6 +292,68 @@ FT231XQ
 Host PC recognizes device
 ```
 
+## Data Flow — Daughtercard Command Routing
+
+The motherboard routes driverboard commands to one of 4 daughtercard UARTs based on `boardID` (byte 0 of payload). Three routing modes exist:
+
+### Mode 1 — Async Forward (26 commands)
+
+```
+GUI → USART10 RX → Command_Dispatch()
+    │ boardID = payload[0]
+    │ ISR sets dc_forward_request.pending
+    ▼
+Main loop
+    │ Selects DC UART by boardID (0-3)
+    │ DC_Uart_Send() — polled TX to target UART
+    ▼
+Daughtercard processes command
+    │ Response arrives via DMA circular RX
+    │ HT/TC/IDLE interrupt → DC_Uart_RxProcessISR()
+    │ → Protocol_FeedBytes() → OnDC_PacketReceived()
+    ▼
+tx_request.pending = true → USART10 TX → GUI
+```
+
+### Mode 2 — Synchronous SET_LIST_OF_SW (0x0B51)
+
+```
+GUI sends payload: [boardID][bank][SW_hi][SW_lo][state] x N groups
+    │
+Main loop iterates each 5-byte group:
+    │ Sends SetSingleSwitch (0x0A10) to target DC UART
+    │ Waits for response (10 ms timeout per group)
+    │ dc_list_active flag → OnDC_PacketReceived deposits to mailbox
+    ▼
+Aggregate response → tx_request → USART10 TX → GUI
+```
+
+### Mode 3 — Synchronous GET_LIST_OF_SW (0x0B52)
+
+Same sequential pattern as Mode 2 but with 4-byte groups `[boardID][bank][SW_hi][SW_lo]`, forwarded as GetSingleSwitch (0x0A11).
+
+### BoardID → UART Mapping
+
+| boardID | Handle | UART | TX / RX Pins | Connector |
+|---------|--------|------|-------------|-----------|
+| 0 | dc1_handle | USART1 | PB14 TX / PB15 RX | Connector 1 bottom |
+| 1 | dc2_handle | USART2 | PA2 TX / PA3 RX | Connector 1 top |
+| 2 | dc3_handle | USART3 | PB10 TX / PB11 RX | Connector 2 bottom |
+| 3 | dc4_handle | UART4 | PC10 TX / PC11 RX | Connector 2 top |
+
+### DMA Stream Assignments
+
+| Stream | Peripheral | Direction | Mode |
+|--------|-----------|-----------|------|
+| DMA1 Stream 0 | USART10 TX | TX | Normal |
+| DMA1 Stream 1 | USART10 RX | RX | Circular |
+| DMA1 Stream 2 | DC1 USART1 RX | RX | Circular |
+| DMA1 Stream 3 | DC2 USART2 RX | RX | Circular |
+| DMA1 Stream 4 | DC3 USART3 RX | RX | Circular |
+| DMA1 Stream 5 | DC4 UART4 RX | RX | Circular |
+
+DC UART TX is polled (no DMA needed).
+
 ## Configuration vs. State Separation
 
 All hardware configuration data is **const** (stored in flash):
@@ -335,6 +408,14 @@ static uint8_t usart10_rx_dma_buf[4096];
 | DMA1_Stream1 (RX) | 4 | `DMA_STR1_IRQHandler` | USART10 RX HT/TC |
 | USART10 | 5 | `USART10_IRQHandler` | IDLE line detection |
 | DMA1_Stream0 (TX) | 6 | `DMA_STR0_IRQHandler` | USART10 TX complete |
+| DMA1_Stream2 | — | `DMA_STR2_IRQHandler` | DC1 USART1 RX DMA HT/TC |
+| DMA1_Stream3 | — | `DMA_STR3_IRQHandler` | DC2 USART2 RX DMA HT/TC |
+| DMA1_Stream4 | — | `DMA_STR4_IRQHandler` | DC3 USART3 RX DMA HT/TC |
+| DMA1_Stream5 | — | `DMA_STR5_IRQHandler` | DC4 UART4 RX DMA HT/TC |
+| USART1 | — | `USART1_IRQHandler` | DC1 IDLE line detection |
+| USART2 | — | `USART2_IRQHandler` | DC2 IDLE line detection |
+| USART3 | — | `USART3_IRQHandler` | DC3 IDLE line detection |
+| UART4 | — | `UART4_IRQHandler` | DC4 IDLE line detection |
 
 ## Adding a New Peripheral
 

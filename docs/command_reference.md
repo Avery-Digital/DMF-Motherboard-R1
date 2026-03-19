@@ -207,11 +207,130 @@ Each `case` in `Command_Dispatch()` passes the appropriate `LoadSwitch_ID` enum 
 
 ---
 
+---
+
+## CMD_THERM1–CMD_THERM6 — Thermistor Reads (`0x0C20`–`0x0C25`)
+
+**Purpose:** Read a thermistor channel from ADS7066 instance 3.
+
+| Command | Code | ADS7066 Channel |
+|---------|------|-----------------|
+| `CMD_THERM1` | `0x0C20` | Instance 3, ch0 |
+| `CMD_THERM2` | `0x0C21` | Instance 3, ch1 |
+| `CMD_THERM3` | `0x0C22` | Instance 3, ch2 |
+| `CMD_THERM4` | `0x0C23` | Instance 3, ch3 |
+| `CMD_THERM5` | `0x0C24` | Instance 3, ch4 |
+| `CMD_THERM6` | `0x0C25` | Instance 3, ch5 |
+
+**Request payload:** None (length = 0).
+
+**Response payload:** 2 bytes, little-endian unsigned 16-bit ADC result.
+
+**Execution context:** ISR → deferred TX via `tx_request`.
+
+---
+
+## Daughtercard Routed Commands
+
+The motherboard does not execute these commands locally. Instead, it routes them to one of 4 daughtercard UARTs based on `boardID` (payload byte 0). The response from the daughtercard is relayed back to the GUI over USART10.
+
+### BoardID Mapping
+
+| boardID | UART | Connector |
+|---------|------|-----------|
+| 0 | USART1 | Connector 1 bottom |
+| 1 | USART2 | Connector 1 top |
+| 2 | USART3 | Connector 2 bottom |
+| 3 | UART4 | Connector 2 top |
+
+### Mode 1 — Async Forward Commands
+
+These 26 commands are forwarded asynchronously. The ISR defers to the main loop via `dc_forward_request`. The main loop sends the packet to the correct DC UART, and the response is relayed back to the GUI when it arrives.
+
+| Code | Name | Description |
+|------|------|-------------|
+| `0xBEEF` | `CMD_DC_DEBUG` | Debug test loopback |
+| `0x0A00` | `AllSwitchesFloat` | Float all switches |
+| `0x0A01` | `AllSwitchesToVIn1` | All switches to HVSG |
+| `0x0A02` | `AllSwitchesToVIn2` | All switches to GND |
+| `0x0A10` | `SetSingleSwitch` | Set one switch |
+| `0x0A11` | `GetSingleSwitch` | Get one switch state |
+| `0x0A50` | `PMUTurnCh0On` | PMU ch0 on |
+| `0x0A51` | `PMUTurnCh0Off` | PMU ch0 off |
+| `0x0A52` | `PMUTurnCh1On` | PMU ch1 on |
+| `0x0A53` | `PMUTurnCh1Off` | PMU ch1 off |
+| `0x0AC4` | `EHVGSetPWMFreq` | Set PWM frequency |
+| `0x0AC5` | `EHVGGetPWMFreq` | Get PWM frequency |
+| `0x0AC6` | `EHVGSetPWMDC` | Set PWM duty cycle |
+| `0x0AC7` | `EHVGGetPWMDC` | Get PWM duty cycle |
+| `0x0AD0` | `EHVGTurnCh0On` | HVSG ch0 on |
+| `0x0AD1` | `EHVGTurnCh0Off` | HVSG ch0 off |
+| `0x0AD2` | `EHVGTurnCh1On` | HVSG ch1 on |
+| `0x0AD3` | `EHVGTurnCh1Off` | HVSG ch1 off |
+| `0x0AD4` | `EHVGSetVCh0` | Set HVSG ch0 voltage |
+| `0x0AD5` | `EHVGGetVCh0` | Get HVSG ch0 voltage |
+| `0x0AD6` | `EHVGSetVCh1` | Set HVSG ch1 voltage |
+| `0x0AD7` | `EHVGGetVCh1` | Get HVSG ch1 voltage |
+| `0x0B01` | `GET_INA228_CH0` | Read INA228 ch0 |
+| `0x0B02` | `GET_INA228_CH1` | Read INA228 ch1 |
+| `0x0B53` | `GET_ALL_SW` | Get all 600 switch states |
+| `0x0B99` | `GET_BOARD_TYPE` | Board identification |
+
+**Request payload:** Byte 0 = boardID (0–3), remaining bytes = command-specific payload.
+
+**Response payload:** Relayed from the daughtercard without modification.
+
+**Execution context:** ISR → deferred to main loop via `dc_forward_request` → polled TX to DC UART → DMA RX response → relay to GUI via `tx_request`.
+
+### Mode 2 — SET_LIST_OF_SW (`0x0B51`)
+
+**Purpose:** Bulk-set multiple switches across multiple daughtercards in a single command. The motherboard sequentially sends each group to the target board and waits for a response.
+
+**Request payload:** Groups of 5 bytes, repeated N times:
+
+| Offset | Size | Content |
+|--------|------|---------|
+| 0 | 1 | boardID (0–3) |
+| 1 | 1 | bank |
+| 2 | 1 | SW_hi |
+| 3 | 1 | SW_lo |
+| 4 | 1 | state |
+
+**Behavior:** For each 5-byte group, the main loop sends a `SetSingleSwitch` (`0x0A10`) command to the target daughtercard and waits up to 10 ms for a response. The `dc_list_active` flag causes `OnDC_PacketReceived` to deposit responses into the `dc_response` mailbox instead of relaying directly.
+
+**Response payload:** Aggregate response sent to GUI after all groups are processed.
+
+**Execution context:** ISR → deferred to main loop → synchronous sequential send/receive.
+
+### Mode 3 — GET_LIST_OF_SW (`0x0B52`)
+
+**Purpose:** Bulk-query multiple switch states across multiple daughtercards.
+
+**Request payload:** Groups of 4 bytes, repeated N times:
+
+| Offset | Size | Content |
+|--------|------|---------|
+| 0 | 1 | boardID (0–3) |
+| 1 | 1 | bank |
+| 2 | 1 | SW_hi |
+| 3 | 1 | SW_lo |
+
+**Behavior:** Same sequential pattern as SET_LIST_OF_SW, but each group is forwarded as `GetSingleSwitch` (`0x0A11`).
+
+**Response payload:** Aggregate response sent to GUI after all groups are processed.
+
+**Execution context:** ISR → deferred to main loop → synchronous sequential send/receive.
+
+---
+
 ## Command Code Allocation
 
 | Range | Category |
 |-------|----------|
 | `0xDExx` | Debug / test commands |
-| `0x0Cxx` | ADC / sensor read commands (0x0C01–0x0C02) and load switch commands (0x0C10–0x0C19) |
+| `0x0Axx` | Driverboard switch/PMU/EHVG commands (routed to daughtercards) |
+| `0x0Bxx` | Driverboard bulk/query commands (routed to daughtercards) |
+| `0x0Cxx` | Motherboard-local: ADC reads (0x0C01–0x0C02), load switches (0x0C10–0x0C19), thermistors (0x0C20–0x0C25) |
 | `0x10xx` | (reserved — future control commands) |
+| `0xBExx` | Debug routed commands (0xBEEF) |
 | `0xFFxx` | (reserved — system/reset commands) |
