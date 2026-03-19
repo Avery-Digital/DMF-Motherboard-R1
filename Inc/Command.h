@@ -59,6 +59,40 @@ extern "C" {
 #define CMD_LOAD_FIRST      CMD_LOAD_VALVE1
 #define CMD_LOAD_LAST       CMD_LOAD_DAUGHTER2
 
+/* ---- Thermistor Commands (0x0C20–0x0C25) ----
+ *
+ *  Read ADS7066 instance 3, channels 0–5.
+ *  Response payload: 2 bytes, 16-bit ADC code, little-endian.
+ */
+#define CMD_THERM1          CMD_CODE(0x0C, 0x20)    /**< Thermistor 1 (inst3, ch0) */
+#define CMD_THERM2          CMD_CODE(0x0C, 0x21)    /**< Thermistor 2 (inst3, ch1) */
+#define CMD_THERM3          CMD_CODE(0x0C, 0x22)    /**< Thermistor 3 (inst3, ch2) */
+#define CMD_THERM4          CMD_CODE(0x0C, 0x23)    /**< Thermistor 4 (inst3, ch3) */
+#define CMD_THERM5          CMD_CODE(0x0C, 0x24)    /**< Thermistor 5 (inst3, ch4) */
+#define CMD_THERM6          CMD_CODE(0x0C, 0x25)    /**< Thermistor 6 (inst3, ch5) */
+
+/* ---- Daughtercard (Driverboard) Command Routing ----
+ *
+ *  Commands in the 0x0A00–0x0BFF range are driverboard commands.
+ *  The motherboard does NOT execute these — it extracts the boardID
+ *  from the payload and forwards the packet to the correct DC UART.
+ *
+ *  0xBEEF is also a driverboard command (debug test).
+ *
+ *  Two commands require special handling (per-group sequential routing):
+ *    0x0B51 SET_LIST_OF_SW — 5-byte groups [boardID][bank][SW_hi][SW_lo][state]
+ *    0x0B52 GET_LIST_OF_SW — 4-byte groups [boardID][bank][SW_hi][SW_lo]
+ */
+#define CMD_DC_RANGE_START  CMD_CODE(0x0A, 0x00)    /**< First driverboard cmd   */
+#define CMD_DC_RANGE_END    CMD_CODE(0x0B, 0xFF)    /**< Last driverboard cmd    */
+#define CMD_DC_SET_LIST_SW  CMD_CODE(0x0B, 0x51)    /**< Bulk switch set (seq)   */
+#define CMD_DC_GET_LIST_SW  CMD_CODE(0x0B, 0x52)    /**< Bulk switch get (seq)   */
+#define CMD_DC_DEBUG        CMD_CODE(0xBE, 0xEF)    /**< Driverboard debug test  */
+
+/* Driverboard SET_LIST group size */
+#define DC_SET_GROUP_SIZE   5U      /**< [boardID][bank][SW_hi][SW_lo][state] */
+#define DC_GET_GROUP_SIZE   4U      /**< [boardID][bank][SW_hi][SW_lo]        */
+
 /* ========================= Burst ADC Constants ============================ */
 
 #define ADC_BURST_COUNT         100U    /**< Number of samples per burst     */

@@ -45,10 +45,59 @@ typedef struct {
     uint8_t         cmd2;
 } BurstRequest;
 
-extern TxRequest    tx_request;
-extern BurstRequest burst_request;
+/* =================== Daughtercard Forward Request ========================= */
+
+/**
+ * @brief  Deferred request to forward a packet to a daughtercard UART.
+ *         ISR extracts boardID from payload[0], populates this struct.
+ *         Main loop sends via DC_Uart_SendPacket().
+ */
+typedef struct {
+    volatile bool   pending;
+    uint8_t         msg1, msg2, cmd1, cmd2;
+    uint8_t         payload[PKT_MAX_PAYLOAD];
+    uint16_t        length;
+    uint8_t         board_id;       /**< 0–3 → dc1..dc4 handle              */
+} DcForwardRequest;
+
+/**
+ * @brief  Deferred request for SET_LIST_OF_SW / GET_LIST_OF_SW.
+ *         These require synchronous per-group processing in the main loop.
+ */
+typedef struct {
+    volatile bool   pending;
+    uint8_t         msg1, msg2, cmd1, cmd2;
+    uint8_t         payload[PKT_MAX_PAYLOAD];
+    uint16_t        length;
+    uint8_t         mode;           /**< 1 = SET_LIST (5B groups), 2 = GET_LIST (4B groups) */
+} DcListRequest;
+
+/**
+ * @brief  Response mailbox for synchronous daughtercard operations.
+ *         OnDC_PacketReceived deposits here during list processing.
+ */
+typedef struct {
+    volatile bool   ready;
+    uint8_t         payload[PKT_MAX_PAYLOAD];
+    uint16_t        length;
+    uint8_t         cmd1, cmd2;
+} DcResponse;
+
+#define DC_LIST_MODE_SET    1U      /**< SET_LIST_OF_SW (5-byte groups)      */
+#define DC_LIST_MODE_GET    2U      /**< GET_LIST_OF_SW (4-byte groups)      */
+#define DC_RESPONSE_TIMEOUT 10U     /**< Timeout in ms for sync responses    */
+#define DC_MAX_BOARDS       4U      /**< Number of daughtercard slots        */
+
+extern TxRequest        tx_request;
+extern BurstRequest     burst_request;
+extern DcForwardRequest dc_forward_request;
+extern DcListRequest    dc_list_request;
+extern DcResponse       dc_response;
+extern volatile bool    dc_list_active;
+
 /* Exported functions --------------------------------------------------------*/
 void Error_Handler(uint32_t fault_code);
+void Command_ExecuteDcList(void);
 
 #ifdef __cplusplus
 }

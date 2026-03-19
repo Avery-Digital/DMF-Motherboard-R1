@@ -15,6 +15,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "bsp.h"
 #include "usart_driver.h"
+#include "DC_Uart_Driver.h"
 #include "stm32h7xx_ll_utils.h"
 #include "ll_tick.h"
 
@@ -122,10 +123,130 @@ void USART10_IRQHandler(void)
     }
 }
 
-void DMA1_Stream5_IRQHandler(void)
+/* ==========================================================================
+ *  DMA1 STREAM 2 — DC1 USART1 RX (HT/TC)
+ * ========================================================================== */
+void DMA_STR2_IRQHandler(void)
 {
-    LL_DMA_ClearFlag_TC5(DMA1);
-    LL_DMA_ClearFlag_HT5(DMA1);
-    LL_DMA_ClearFlag_TE5(DMA1);
-    LL_DMA_ClearFlag_DME5(DMA1);
+    if (LL_DMA_IsActiveFlag_HT2(DMA1)) {
+        LL_DMA_ClearFlag_HT2(DMA1);
+        DC_Uart_RxProcessISR(&dc1_handle);
+    }
+    if (LL_DMA_IsActiveFlag_TC2(DMA1)) {
+        LL_DMA_ClearFlag_TC2(DMA1);
+        DC_Uart_RxProcessISR(&dc1_handle);
+    }
+    if (LL_DMA_IsActiveFlag_TE2(DMA1)) {
+        LL_DMA_ClearFlag_TE2(DMA1);
+    }
+}
+
+/* ==========================================================================
+ *  DMA1 STREAM 3 — DC2 USART2 RX (HT/TC)
+ * ========================================================================== */
+void DMA_STR3_IRQHandler(void)
+{
+    if (LL_DMA_IsActiveFlag_HT3(DMA1)) {
+        LL_DMA_ClearFlag_HT3(DMA1);
+        DC_Uart_RxProcessISR(&dc2_handle);
+    }
+    if (LL_DMA_IsActiveFlag_TC3(DMA1)) {
+        LL_DMA_ClearFlag_TC3(DMA1);
+        DC_Uart_RxProcessISR(&dc2_handle);
+    }
+    if (LL_DMA_IsActiveFlag_TE3(DMA1)) {
+        LL_DMA_ClearFlag_TE3(DMA1);
+    }
+}
+
+/* ==========================================================================
+ *  DMA1 STREAM 4 — DC3 USART3 RX (HT/TC)
+ * ========================================================================== */
+void DMA_STR4_IRQHandler(void)
+{
+    if (LL_DMA_IsActiveFlag_HT4(DMA1)) {
+        LL_DMA_ClearFlag_HT4(DMA1);
+        DC_Uart_RxProcessISR(&dc3_handle);
+    }
+    if (LL_DMA_IsActiveFlag_TC4(DMA1)) {
+        LL_DMA_ClearFlag_TC4(DMA1);
+        DC_Uart_RxProcessISR(&dc3_handle);
+    }
+    if (LL_DMA_IsActiveFlag_TE4(DMA1)) {
+        LL_DMA_ClearFlag_TE4(DMA1);
+    }
+}
+
+/* ==========================================================================
+ *  DMA1 STREAM 5 — DC4 UART4 RX (HT/TC)
+ * ========================================================================== */
+void DMA_STR5_IRQHandler(void)
+{
+    if (LL_DMA_IsActiveFlag_HT5(DMA1)) {
+        LL_DMA_ClearFlag_HT5(DMA1);
+        DC_Uart_RxProcessISR(&dc4_handle);
+    }
+    if (LL_DMA_IsActiveFlag_TC5(DMA1)) {
+        LL_DMA_ClearFlag_TC5(DMA1);
+        DC_Uart_RxProcessISR(&dc4_handle);
+    }
+    if (LL_DMA_IsActiveFlag_TE5(DMA1)) {
+        LL_DMA_ClearFlag_TE5(DMA1);
+    }
+}
+
+/* ==========================================================================
+ *  USART1 — DC1 IDLE LINE
+ * ========================================================================== */
+void USART1_IRQHandler(void)
+{
+    if (LL_USART_IsActiveFlag_IDLE(USART1)) {
+        LL_USART_ClearFlag_IDLE(USART1);
+        DC_Uart_RxProcessISR(&dc1_handle);
+    }
+    if (LL_USART_IsActiveFlag_ORE(USART1))  LL_USART_ClearFlag_ORE(USART1);
+    if (LL_USART_IsActiveFlag_FE(USART1))   LL_USART_ClearFlag_FE(USART1);
+    if (LL_USART_IsActiveFlag_NE(USART1))   LL_USART_ClearFlag_NE(USART1);
+}
+
+/* ==========================================================================
+ *  USART2 — DC2 IDLE LINE
+ * ========================================================================== */
+void USART2_IRQHandler(void)
+{
+    if (LL_USART_IsActiveFlag_IDLE(USART2)) {
+        LL_USART_ClearFlag_IDLE(USART2);
+        DC_Uart_RxProcessISR(&dc2_handle);
+    }
+    if (LL_USART_IsActiveFlag_ORE(USART2))  LL_USART_ClearFlag_ORE(USART2);
+    if (LL_USART_IsActiveFlag_FE(USART2))   LL_USART_ClearFlag_FE(USART2);
+    if (LL_USART_IsActiveFlag_NE(USART2))   LL_USART_ClearFlag_NE(USART2);
+}
+
+/* ==========================================================================
+ *  USART3 — DC3 IDLE LINE
+ * ========================================================================== */
+void USART3_IRQHandler(void)
+{
+    if (LL_USART_IsActiveFlag_IDLE(USART3)) {
+        LL_USART_ClearFlag_IDLE(USART3);
+        DC_Uart_RxProcessISR(&dc3_handle);
+    }
+    if (LL_USART_IsActiveFlag_ORE(USART3))  LL_USART_ClearFlag_ORE(USART3);
+    if (LL_USART_IsActiveFlag_FE(USART3))   LL_USART_ClearFlag_FE(USART3);
+    if (LL_USART_IsActiveFlag_NE(USART3))   LL_USART_ClearFlag_NE(USART3);
+}
+
+/* ==========================================================================
+ *  UART4 — DC4 IDLE LINE
+ * ========================================================================== */
+void UART4_IRQHandler(void)
+{
+    if (LL_USART_IsActiveFlag_IDLE(UART4)) {
+        LL_USART_ClearFlag_IDLE(UART4);
+        DC_Uart_RxProcessISR(&dc4_handle);
+    }
+    if (LL_USART_IsActiveFlag_ORE(UART4))  LL_USART_ClearFlag_ORE(UART4);
+    if (LL_USART_IsActiveFlag_FE(UART4))   LL_USART_ClearFlag_FE(UART4);
+    if (LL_USART_IsActiveFlag_NE(UART4))   LL_USART_ClearFlag_NE(UART4);
 }

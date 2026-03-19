@@ -20,6 +20,8 @@
 #include "main.h"
 #include "spi_driver.h"
 #include "VN5T016AH.h"
+#include "ADS7066.h"
+#include "DC_Uart_Driver.h"
 #include "bsp.h"
 #include <string.h>
 
@@ -40,6 +42,20 @@ static void Command_HandleLoadSwitch(USART_Handle *handle,
                                      const PacketHeader *header,
                                      const uint8_t *payload,
                                      LoadSwitch_ID id);
+
+static void Command_HandleThermistor(USART_Handle *handle,
+                                      const PacketHeader *header,
+                                      const uint8_t *payload,
+                                      uint8_t channel);
+
+static void Command_HandleDcForward(const PacketHeader *header,
+                                     const uint8_t *payload);
+
+static void Command_HandleDcSetList(const PacketHeader *header,
+                                     const uint8_t *payload);
+
+static void Command_HandleDcGetList(const PacketHeader *header,
+                                     const uint8_t *payload);
 
 /* ==========================================================================
  *  COMMAND DISPATCH
@@ -100,8 +116,45 @@ void Command_Dispatch(USART_Handle *handle,
         Command_HandleLoadSwitch(handle, header, payload, LOAD_DAUGHTER_2);
         break;
 
+    /* ---- Thermistor Commands (ADS7066 instance 3, ch 0–5) ---- */
+    case CMD_THERM1:
+        Command_HandleThermistor(handle, header, payload, 0);
+        break;
+    case CMD_THERM2:
+        Command_HandleThermistor(handle, header, payload, 1);
+        break;
+    case CMD_THERM3:
+        Command_HandleThermistor(handle, header, payload, 2);
+        break;
+    case CMD_THERM4:
+        Command_HandleThermistor(handle, header, payload, 3);
+        break;
+    case CMD_THERM5:
+        Command_HandleThermistor(handle, header, payload, 4);
+        break;
+    case CMD_THERM6:
+        Command_HandleThermistor(handle, header, payload, 5);
+        break;
+
+    /* ---- Driverboard Debug Command (0xBEEF) ---- */
+    case CMD_DC_DEBUG:
+        Command_HandleDcForward(header, payload);
+        break;
+
+    /* ---- Driverboard Bulk Switch Commands (synchronous) ---- */
+    case CMD_DC_SET_LIST_SW:
+        Command_HandleDcSetList(header, payload);
+        break;
+    case CMD_DC_GET_LIST_SW:
+        Command_HandleDcGetList(header, payload);
+        break;
+
     default:
-        /* Unknown command — ignore or send NACK */
+        /* Check if command falls in driverboard range (0x0A00–0x0BFF) */
+        if (cmd >= CMD_DC_RANGE_START && cmd <= CMD_DC_RANGE_END) {
+            Command_HandleDcForward(header, payload);
+        }
+        /* Unknown command — ignore */
         break;
     }
 }
@@ -309,4 +362,119 @@ static void Command_HandleLoadSwitch(USART_Handle *handle,
     tx_request.payload[0] = response;
     tx_request.length  = 1U;
     tx_request.pending = true;  /* Must be last — acts as the commit */
+}
+
+/* ==========================================================================
+ *  THERMISTOR COMMANDS (0x0C20–0x0C25) — ISR context
+ *
+ *  Reads ADS7066 instance 3 on the specified channel (0–5).
+ *  Each channel is connected to a thermistor circuit.
+ *
+ *  Response payload (2 bytes):
+ *    Byte 0 — ADC result bits [7:0]  (LSB)
+ *    Byte 1 — ADC result bits [15:8] (MSB)
+ *
+ *  On error, both bytes are set to 0xFF.
+ * ========================================================================== */
+static void Command_HandleThermistor(USART_Handle *handle,
+                                      const PacketHeader *header,
+                                      const uint8_t *payload,
+                                      uint8_t channel)
+{
+    (void)handle;
+    (void)payload;
+
+    uint16_t adc_result = 0U;
+    uint8_t  response[2];
+
+    ADS7066_Status status = ADS7066_ReadChannel(&ads7066_3_handle,
+                                                 channel, &adc_result);
+
+    if (status == ADS7066_OK) {
+        response[0] = (uint8_t)( adc_result       & 0xFFU);
+        response[1] = (uint8_t)((adc_result >> 8U) & 0xFFU);
+    } else {
+        response[0] = 0xFFU;
+        response[1] = 0xFFU;
+    }
+
+    tx_request.msg1    = header->msg1;
+    tx_request.msg2    = header->msg2;
+    tx_request.cmd1    = header->cmd1;
+    tx_request.cmd2    = header->cmd2;
+    memcpy(tx_request.payload, response, sizeof(response));
+    tx_request.length  = sizeof(response);
+    tx_request.pending = true;  /* Must be last — acts as the commit */
+}
+
+/* ==========================================================================
+ *  DAUGHTERCARD ASYNC FORWARD — ISR context
+ *
+ *  Extracts boardID from payload[0] and defers the entire packet to the
+ *  main loop for forwarding to the correct DC UART.
+ *
+ *  BoardID mapping (0-based):
+ *    0 → dc1_handle (USART1)    2 → dc3_handle (USART3)
+ *    1 → dc2_handle (USART2)    3 → dc4_handle (UART4)
+ * ========================================================================== */
+static void Command_HandleDcForward(const PacketHeader *header,
+                                     const uint8_t *payload)
+{
+    if (header->length == 0U || payload == NULL) return;
+
+    uint8_t board_id = payload[0];
+    if (board_id >= DC_MAX_BOARDS) return;
+
+    dc_forward_request.msg1     = header->msg1;
+    dc_forward_request.msg2     = header->msg2;
+    dc_forward_request.cmd1     = header->cmd1;
+    dc_forward_request.cmd2     = header->cmd2;
+    dc_forward_request.board_id = board_id;
+    memcpy(dc_forward_request.payload, payload, header->length);
+    dc_forward_request.length   = header->length;
+    dc_forward_request.pending  = true;  /* Must be last */
+}
+
+/* ==========================================================================
+ *  SET_LIST_OF_SW (0x0B51) — ISR context, deferred to main loop
+ *
+ *  Payload = groups of 5 bytes: [boardID][bank][SW_hi][SW_lo][state]
+ *  The main loop processes each group sequentially, sending a
+ *  SetSingleSwitch (0x0A10) command to the target daughtercard.
+ * ========================================================================== */
+static void Command_HandleDcSetList(const PacketHeader *header,
+                                     const uint8_t *payload)
+{
+    if (header->length == 0U || payload == NULL) return;
+
+    dc_list_request.msg1   = header->msg1;
+    dc_list_request.msg2   = header->msg2;
+    dc_list_request.cmd1   = header->cmd1;
+    dc_list_request.cmd2   = header->cmd2;
+    dc_list_request.mode   = DC_LIST_MODE_SET;
+    memcpy(dc_list_request.payload, payload, header->length);
+    dc_list_request.length = header->length;
+    dc_list_request.pending = true;  /* Must be last */
+}
+
+/* ==========================================================================
+ *  GET_LIST_OF_SW (0x0B52) — ISR context, deferred to main loop
+ *
+ *  Payload = groups of 4 bytes: [boardID][bank][SW_hi][SW_lo]
+ *  The main loop processes each group sequentially, sending a
+ *  GetSingleSwitch (0x0A11) command to the target daughtercard.
+ * ========================================================================== */
+static void Command_HandleDcGetList(const PacketHeader *header,
+                                     const uint8_t *payload)
+{
+    if (header->length == 0U || payload == NULL) return;
+
+    dc_list_request.msg1   = header->msg1;
+    dc_list_request.msg2   = header->msg2;
+    dc_list_request.cmd1   = header->cmd1;
+    dc_list_request.cmd2   = header->cmd2;
+    dc_list_request.mode   = DC_LIST_MODE_GET;
+    memcpy(dc_list_request.payload, payload, header->length);
+    dc_list_request.length = header->length;
+    dc_list_request.pending = true;  /* Must be last */
 }

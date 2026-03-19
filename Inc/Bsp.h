@@ -250,6 +250,34 @@ typedef struct {
     uint16_t                   crc_accumulator;
 } USART_Handle;
 
+/* =================== Daughtercard UART Handle ============================= */
+
+/**
+ * @brief  Lightweight handle for daughtercard UARTs (polled TX + DMA RX).
+ *         Reuses USART_Config for peripheral settings and DMA_ChannelConfig
+ *         for the RX stream.  No DMA TX fields needed.
+ */
+typedef struct {
+    const USART_Config        *cfg;
+    const DMA_ChannelConfig   *dma_rx;
+
+    /* RX DMA buffer — must be in D2 SRAM (.dma_buffer section) */
+    uint8_t                   *rx_buf;
+    uint16_t                   rx_buf_size;
+
+    /* Protocol parser — assigned at init, used by ISR */
+    void                      *parser;
+
+    /* RX tracking */
+    volatile uint16_t          rx_head;
+
+    /* true = APB2 (USART1), false = APB1 (USART2/3/UART4) */
+    bool                       is_apb2;
+
+    /* Instance ID (1–4) for debug */
+    uint8_t                    dc_index;
+} DC_Uart_Handle;
+
 /* =========================== SPI Configuration ============================ */
 
 /**
@@ -447,6 +475,23 @@ extern SPI_Handle               spi2_handle;
 /* I2C1 on PB8 (SCL) / PB7 (SDA) */
 extern const I2C_Config         i2c1_cfg;
 extern I2C_Handle               i2c1_handle;
+
+/* Daughtercard UARTs — polled TX + DMA circular RX */
+extern const USART_Config       dc1_uart_cfg;       /* USART1, PB14 TX / PB15 RX */
+extern const DMA_ChannelConfig  dc1_dma_rx_cfg;     /* DMA1 Stream 2 */
+extern DC_Uart_Handle           dc1_handle;
+
+extern const USART_Config       dc2_uart_cfg;       /* USART2, PA2 TX / PA3 RX */
+extern const DMA_ChannelConfig  dc2_dma_rx_cfg;     /* DMA1 Stream 3 */
+extern DC_Uart_Handle           dc2_handle;
+
+extern const USART_Config       dc3_uart_cfg;       /* USART3, PB10 TX / PB11 RX */
+extern const DMA_ChannelConfig  dc3_dma_rx_cfg;     /* DMA1 Stream 4 */
+extern DC_Uart_Handle           dc3_handle;
+
+extern const USART_Config       dc4_uart_cfg;       /* UART4, PC10 TX / PC11 RX */
+extern const DMA_ChannelConfig  dc4_dma_rx_cfg;     /* DMA1 Stream 5 */
+extern DC_Uart_Handle           dc4_handle;
 
 /* USB2517I strapping pins */
 extern const PinConfig          usb2517_reset_n_pin;    /* PC13 — Pin 9  */

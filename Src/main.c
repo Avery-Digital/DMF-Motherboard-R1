@@ -38,11 +38,18 @@
 #include "DAC80508.h"
 #include "ADS7066.h"
 #include "VN5T016AH.h"
+#include "DC_Uart_Driver.h"
 #include <string.h>
 #include "stm32h7xx_ll_rtc.h"
 #include "spi_driver.h"
-/* Protocol parser instance */
+#include "ll_tick.h"
+
+/* Protocol parser instances */
 static ProtocolParser usart10_parser;
+static ProtocolParser dc1_parser;
+static ProtocolParser dc2_parser;
+static ProtocolParser dc3_parser;
+static ProtocolParser dc4_parser;
 
 /* Deferred TX request — set by ISR, consumed by main loop */
 TxRequest    tx_request    = {0};
@@ -50,12 +57,46 @@ TxRequest    tx_request    = {0};
 /* Deferred burst ADC request — set by ISR, consumed by main loop */
 BurstRequest burst_request = {0};
 
+/* Daughtercard forward request — async, single command to one board */
+DcForwardRequest dc_forward_request = {0};
+
+/* Daughtercard list request — synchronous, per-group sequential */
+DcListRequest    dc_list_request    = {0};
+
+/* Response mailbox for synchronous DC operations */
+DcResponse       dc_response        = {0};
+
+/* Flag: true while Command_ExecuteDcList() is running.
+ * OnDC_PacketReceived uses this to route to dc_response instead of tx_request */
+volatile bool    dc_list_active     = false;
+
+/* ========================== DC Handle Lookup =============================== */
+
+/**
+ * @brief  Map boardID (0–3) to the corresponding DC_Uart_Handle.
+ * @return Pointer to handle, or NULL if boardID is out of range.
+ */
+static DC_Uart_Handle* DC_GetHandle(uint8_t board_id)
+{
+    static DC_Uart_Handle* const dc_handles[DC_MAX_BOARDS] = {
+        &dc1_handle,    /* boardID 0 → USART1 */
+        &dc2_handle,    /* boardID 1 → USART2 */
+        &dc3_handle,    /* boardID 2 → USART3 */
+        &dc4_handle,    /* boardID 3 → UART4  */
+    };
+
+    if (board_id >= DC_MAX_BOARDS) return NULL;
+    return dc_handles[board_id];
+}
 
 /* Private function prototypes -----------------------------------------------*/
 static void SystemInit_Sequence(void);
 static void OnPacketReceived(const PacketHeader *header,
                              const uint8_t *payload,
                              void *ctx);
+static void OnDC_PacketReceived(const PacketHeader *header,
+                                 const uint8_t *payload,
+                                 void *ctx);
 
 
 
@@ -73,6 +114,27 @@ int main(void)
             if (burst_request.pending) {
                 burst_request.pending = false;
                 Command_ExecuteBurstADC();
+            }
+
+            /* Forward a driverboard command to the correct DC UART (async) */
+            if (dc_forward_request.pending) {
+                dc_forward_request.pending = false;
+                DC_Uart_Handle *dc = DC_GetHandle(dc_forward_request.board_id);
+                if (dc != NULL) {
+                    DC_Uart_SendPacket(dc,
+                                       dc_forward_request.msg1,
+                                       dc_forward_request.msg2,
+                                       dc_forward_request.cmd1,
+                                       dc_forward_request.cmd2,
+                                       dc_forward_request.payload,
+                                       dc_forward_request.length);
+                }
+            }
+
+            /* Execute SET_LIST_OF_SW / GET_LIST_OF_SW — synchronous, blocking */
+            if (dc_list_request.pending) {
+                dc_list_request.pending = false;
+                Command_ExecuteDcList();
             }
 
             /* Consume pending TX outside of ISR context */
@@ -209,6 +271,31 @@ static void SystemInit_Sequence(void)
     memcpy(tx_request.payload, test_payload, sizeof(test_payload));
     tx_request.length  = sizeof(test_payload);
     tx_request.pending = true;
+
+    /* Step 10: Daughtercard UARTs — polled TX + DMA circular RX */
+    Protocol_ParserInit(&dc1_parser, OnDC_PacketReceived, &dc1_handle);
+    if (DC_Uart_Init(&dc1_handle, &dc1_parser) != INIT_OK) {
+        Error_Handler(0x12);
+    }
+    DC_Uart_StartRx(&dc1_handle);
+
+    Protocol_ParserInit(&dc2_parser, OnDC_PacketReceived, &dc2_handle);
+    if (DC_Uart_Init(&dc2_handle, &dc2_parser) != INIT_OK) {
+        Error_Handler(0x13);
+    }
+    DC_Uart_StartRx(&dc2_handle);
+
+    Protocol_ParserInit(&dc3_parser, OnDC_PacketReceived, &dc3_handle);
+    if (DC_Uart_Init(&dc3_handle, &dc3_parser) != INIT_OK) {
+        Error_Handler(0x14);
+    }
+    DC_Uart_StartRx(&dc3_handle);
+
+    Protocol_ParserInit(&dc4_parser, OnDC_PacketReceived, &dc4_handle);
+    if (DC_Uart_Init(&dc4_handle, &dc4_parser) != INIT_OK) {
+        Error_Handler(0x15);
+    }
+    DC_Uart_StartRx(&dc4_handle);
 }
 
 /* ==========================================================================
@@ -229,6 +316,175 @@ static void OnPacketReceived(const PacketHeader *header,
 
     /* Route to command handler based on cmd1 + cmd2 */
     Command_Dispatch(&usart10_handle, header, payload);
+}
+
+/* ==========================================================================
+ *  DAUGHTERCARD PACKET RECEIVED CALLBACK
+ *
+ *  Called when a daughtercard sends a response packet.  The ctx pointer
+ *  is the DC_Uart_Handle* so we know which daughtercard sent it.
+ *
+ *  For now, relay the response back to the GUI via USART10.
+ *  Runs in ISR context — keep it fast.
+ * ========================================================================== */
+static void OnDC_PacketReceived(const PacketHeader *header,
+                                 const uint8_t *payload,
+                                 void *ctx)
+{
+    (void)ctx;  /* DC_Uart_Handle* — available if needed */
+
+    /* During synchronous list operations, deposit into the response
+     * mailbox instead of tx_request so the main loop can collect it. */
+    if (dc_list_active) {
+        if (!dc_response.ready) {
+            dc_response.cmd1 = header->cmd1;
+            dc_response.cmd2 = header->cmd2;
+            if (header->length > 0U && header->length <= PKT_MAX_PAYLOAD) {
+                memcpy(dc_response.payload, payload, header->length);
+            }
+            dc_response.length = header->length;
+            dc_response.ready  = true;  /* Must be last */
+        }
+        return;
+    }
+
+    /* Async mode: relay the daughtercard response to the GUI via USART10 */
+    if (!tx_request.pending) {
+        tx_request.msg1 = header->msg1;
+        tx_request.msg2 = header->msg2;
+        tx_request.cmd1 = header->cmd1;
+        tx_request.cmd2 = header->cmd2;
+        if (header->length > 0U && header->length <= PKT_MAX_PAYLOAD) {
+            memcpy(tx_request.payload, payload, header->length);
+        }
+        tx_request.length  = header->length;
+        tx_request.pending = true;
+    }
+}
+
+/* ==========================================================================
+ *  DAUGHTERCARD LIST COMMAND EXECUTION — main loop context only
+ *
+ *  Processes SET_LIST_OF_SW (0x0B51) and GET_LIST_OF_SW (0x0B52) by
+ *  iterating through each group in the payload, forwarding individual
+ *  switch commands to the target daughtercard, waiting for each response,
+ *  and building an aggregate response for the GUI.
+ *
+ *  SET groups: 5 bytes each [boardID][bank][SW_hi][SW_lo][state]
+ *   → forwards as SetSingleSwitch (0x0A10) with payload [boardID][bank][SW_hi][SW_lo][state]
+ *
+ *  GET groups: 4 bytes each [boardID][bank][SW_hi][SW_lo]
+ *   → forwards as GetSingleSwitch (0x0A11) with payload [boardID][bank][SW_hi][SW_lo]
+ *
+ *  This function BLOCKS the main loop until all groups are processed.
+ *  Each round-trip is ~3.4 ms (UART + SPI), timeout is 10 ms per group.
+ * ========================================================================== */
+void Command_ExecuteDcList(void)
+{
+    const uint8_t *data       = dc_list_request.payload;
+    const uint16_t total_len  = dc_list_request.length;
+    const uint8_t  mode       = dc_list_request.mode;
+
+    /* Determine group size and forwarded command code */
+    uint8_t group_size;
+    uint8_t fwd_cmd1, fwd_cmd2;
+
+    if (mode == DC_LIST_MODE_SET) {
+        group_size = DC_SET_GROUP_SIZE;  /* 5 */
+        fwd_cmd1   = 0x0AU;
+        fwd_cmd2   = 0x10U;             /* SetSingleSwitch */
+    } else {
+        group_size = DC_GET_GROUP_SIZE;  /* 4 */
+        fwd_cmd1   = 0x0AU;
+        fwd_cmd2   = 0x11U;             /* GetSingleSwitch */
+    }
+
+    /* Calculate number of groups */
+    uint16_t num_groups = total_len / group_size;
+    if (num_groups == 0U) return;
+
+    /* Aggregate response buffer.
+     * For SET: 3 bytes per group [status_1][status_2][boardID]
+     * For GET: we collect full responses from each daughtercard.
+     * We'll use a simple status-per-group approach for both. */
+    static uint8_t agg_payload[PKT_MAX_PAYLOAD];
+    uint16_t agg_len    = 0U;
+    bool     any_error  = false;
+
+    /* Signal ISR to use mailbox instead of tx_request */
+    dc_list_active = true;
+
+    for (uint16_t g = 0U; g < num_groups; g++) {
+        const uint8_t *group = &data[g * group_size];
+        uint8_t board_id     = group[0];
+
+        /* Validate boardID */
+        DC_Uart_Handle *dc = DC_GetHandle(board_id);
+        if (dc == NULL) {
+            /* Invalid boardID — record error, continue */
+            if (agg_len + 3U <= PKT_MAX_PAYLOAD) {
+                agg_payload[agg_len++] = 0x00U;         /* status_1 */
+                agg_payload[agg_len++] = 0x02U;         /* status_2: bad board */
+                agg_payload[agg_len++] = board_id;       /* boardID */
+            }
+            any_error = true;
+            continue;
+        }
+
+        /* Clear the response mailbox */
+        dc_response.ready = false;
+
+        /* Forward this group's data as a single-switch command.
+         * The payload sent to the daughtercard is the group itself
+         * (boardID + bank + SW + state/nothing). */
+        DC_Uart_SendPacket(dc,
+                           dc_list_request.msg1,
+                           dc_list_request.msg2,
+                           fwd_cmd1, fwd_cmd2,
+                           group, group_size);
+
+        /* Wait for response with timeout */
+        uint32_t t0 = LL_GetTick();
+        while (!dc_response.ready) {
+            if ((LL_GetTick() - t0) >= DC_RESPONSE_TIMEOUT) {
+                break;
+            }
+        }
+
+        if (dc_response.ready) {
+            /* Copy daughtercard response into aggregate buffer */
+            if (agg_len + dc_response.length <= PKT_MAX_PAYLOAD) {
+                memcpy(&agg_payload[agg_len], dc_response.payload,
+                       dc_response.length);
+                agg_len += dc_response.length;
+            }
+            dc_response.ready = false;
+        } else {
+            /* Timeout — record error for this group */
+            if (agg_len + 3U <= PKT_MAX_PAYLOAD) {
+                agg_payload[agg_len++] = 0x00U;         /* status_1 */
+                agg_payload[agg_len++] = 0x05U;         /* status_2: timeout */
+                agg_payload[agg_len++] = board_id;       /* boardID */
+            }
+            any_error = true;
+        }
+    }
+
+    /* Done with synchronous processing */
+    dc_list_active = false;
+
+    /* Send aggregate response to GUI */
+    tx_request.msg1   = dc_list_request.msg1;
+    tx_request.msg2   = dc_list_request.msg2;
+    tx_request.cmd1   = dc_list_request.cmd1;
+    tx_request.cmd2   = dc_list_request.cmd2;
+    if (agg_len > 0U) {
+        memcpy(tx_request.payload, agg_payload, agg_len);
+    }
+    tx_request.length  = agg_len;
+    tx_request.pending = true;
+
+    (void)any_error;  /* Available for future use (e.g., error LED) */
 }
 
 /* ==========================================================================

@@ -423,6 +423,304 @@ SPI_Handle spi2_handle = {
 };
 
 /* ==========================================================================
+ *  DAUGHTERCARD UART INTERFACES
+ *
+ *  4 UARTs for communicating with stacked daughtercard (driver board) PCBs.
+ *  Polled TX + DMA circular RX.  All at 115200 baud, 8N1.
+ *
+ *  DC1: USART1, PB14 TX (AF4), PB15 RX (AF4), DMA1 Stream 2 RX
+ *  DC2: USART2, PA2  TX (AF7), PA3  RX (AF7), DMA1 Stream 3 RX
+ *  DC3: USART3, PB10 TX (AF7), PB11 RX (AF7), DMA1 Stream 4 RX
+ *  DC4: UART4,  PC10 TX (AF8), PC11 RX (AF8), DMA1 Stream 5 RX
+ * ========================================================================== */
+
+#define DC_UART_RX_BUF_SIZE  256U
+
+__attribute__((section(".dma_buffer"), aligned(32)))
+static uint8_t dc1_rx_dma_buf[DC_UART_RX_BUF_SIZE];
+
+__attribute__((section(".dma_buffer"), aligned(32)))
+static uint8_t dc2_rx_dma_buf[DC_UART_RX_BUF_SIZE];
+
+__attribute__((section(".dma_buffer"), aligned(32)))
+static uint8_t dc3_rx_dma_buf[DC_UART_RX_BUF_SIZE];
+
+__attribute__((section(".dma_buffer"), aligned(32)))
+static uint8_t dc4_rx_dma_buf[DC_UART_RX_BUF_SIZE];
+
+/* ---- DC1: USART1 on PB14/PB15 (AF4) ---- */
+
+const USART_Config dc1_uart_cfg = {
+    .tx_pin = {
+        .clk    = LL_AHB4_GRP1_PERIPH_GPIOB,
+        .port   = GPIOB,
+        .pin    = LL_GPIO_PIN_14,
+        .mode   = LL_GPIO_MODE_ALTERNATE,
+        .af     = LL_GPIO_AF_4,
+        .speed  = LL_GPIO_SPEED_FREQ_VERY_HIGH,
+        .pull   = LL_GPIO_PULL_NO,
+        .output = LL_GPIO_OUTPUT_PUSHPULL,
+    },
+    .rx_pin = {
+        .clk    = LL_AHB4_GRP1_PERIPH_GPIOB,
+        .port   = GPIOB,
+        .pin    = LL_GPIO_PIN_15,
+        .mode   = LL_GPIO_MODE_ALTERNATE,
+        .af     = LL_GPIO_AF_4,
+        .speed  = LL_GPIO_SPEED_FREQ_VERY_HIGH,
+        .pull   = LL_GPIO_PULL_UP,
+        .output = LL_GPIO_OUTPUT_PUSHPULL,
+    },
+    .peripheral        = USART1,
+    .bus_clk_enable    = LL_APB2_GRP1_PERIPH_USART1,
+    .kernel_clk_source = LL_RCC_USART16910_CLKSOURCE_PLL2Q,
+    .prescaler         = LL_USART_PRESCALER_DIV1,
+    .baudrate          = 115200U,
+    .data_width        = LL_USART_DATAWIDTH_8B,
+    .stop_bits         = LL_USART_STOPBITS_1,
+    .parity            = LL_USART_PARITY_NONE,
+    .direction         = LL_USART_DIRECTION_TX_RX,
+    .hw_flow_control   = LL_USART_HWCONTROL_NONE,
+    .oversampling      = LL_USART_OVERSAMPLING_16,
+    .kernel_clk_hz     = 128000000UL,
+    .irqn              = USART1_IRQn,
+    .irq_priority      = 5U,
+};
+
+const DMA_ChannelConfig dc1_dma_rx_cfg = {
+    .dma_clk_enable    = LL_AHB1_GRP1_PERIPH_DMA1,
+    .dma               = DMA1,
+    .stream            = LL_DMA_STREAM_2,
+    .request           = LL_DMAMUX1_REQ_USART1_RX,
+    .direction         = LL_DMA_DIRECTION_PERIPH_TO_MEMORY,
+    .mode              = LL_DMA_MODE_CIRCULAR,
+    .priority          = LL_DMA_PRIORITY_HIGH,
+    .periph_data_align = LL_DMA_PDATAALIGN_BYTE,
+    .mem_data_align    = LL_DMA_MDATAALIGN_BYTE,
+    .periph_inc        = LL_DMA_PERIPH_NOINCREMENT,
+    .mem_inc           = LL_DMA_MEMORY_INCREMENT,
+    .use_fifo          = false,
+    .fifo_threshold    = 0U,
+    .irqn              = DMA1_Stream2_IRQn,
+    .irq_priority      = 4U,
+};
+
+DC_Uart_Handle dc1_handle = {
+    .cfg         = &dc1_uart_cfg,
+    .dma_rx      = &dc1_dma_rx_cfg,
+    .rx_buf      = dc1_rx_dma_buf,
+    .rx_buf_size = DC_UART_RX_BUF_SIZE,
+    .parser      = NULL,
+    .rx_head     = 0U,
+    .is_apb2     = true,
+    .dc_index    = 1U,
+};
+
+/* ---- DC2: USART2 on PA2/PA3 (AF7) ---- */
+
+const USART_Config dc2_uart_cfg = {
+    .tx_pin = {
+        .clk    = LL_AHB4_GRP1_PERIPH_GPIOA,
+        .port   = GPIOA,
+        .pin    = LL_GPIO_PIN_2,
+        .mode   = LL_GPIO_MODE_ALTERNATE,
+        .af     = LL_GPIO_AF_7,
+        .speed  = LL_GPIO_SPEED_FREQ_VERY_HIGH,
+        .pull   = LL_GPIO_PULL_NO,
+        .output = LL_GPIO_OUTPUT_PUSHPULL,
+    },
+    .rx_pin = {
+        .clk    = LL_AHB4_GRP1_PERIPH_GPIOA,
+        .port   = GPIOA,
+        .pin    = LL_GPIO_PIN_3,
+        .mode   = LL_GPIO_MODE_ALTERNATE,
+        .af     = LL_GPIO_AF_7,
+        .speed  = LL_GPIO_SPEED_FREQ_VERY_HIGH,
+        .pull   = LL_GPIO_PULL_UP,
+        .output = LL_GPIO_OUTPUT_PUSHPULL,
+    },
+    .peripheral        = USART2,
+    .bus_clk_enable    = LL_APB1_GRP1_PERIPH_USART2,
+    .kernel_clk_source = LL_RCC_USART234578_CLKSOURCE_PLL2Q,
+    .prescaler         = LL_USART_PRESCALER_DIV1,
+    .baudrate          = 115200U,
+    .data_width        = LL_USART_DATAWIDTH_8B,
+    .stop_bits         = LL_USART_STOPBITS_1,
+    .parity            = LL_USART_PARITY_NONE,
+    .direction         = LL_USART_DIRECTION_TX_RX,
+    .hw_flow_control   = LL_USART_HWCONTROL_NONE,
+    .oversampling      = LL_USART_OVERSAMPLING_16,
+    .kernel_clk_hz     = 128000000UL,
+    .irqn              = USART2_IRQn,
+    .irq_priority      = 5U,
+};
+
+const DMA_ChannelConfig dc2_dma_rx_cfg = {
+    .dma_clk_enable    = LL_AHB1_GRP1_PERIPH_DMA1,
+    .dma               = DMA1,
+    .stream            = LL_DMA_STREAM_3,
+    .request           = LL_DMAMUX1_REQ_USART2_RX,
+    .direction         = LL_DMA_DIRECTION_PERIPH_TO_MEMORY,
+    .mode              = LL_DMA_MODE_CIRCULAR,
+    .priority          = LL_DMA_PRIORITY_HIGH,
+    .periph_data_align = LL_DMA_PDATAALIGN_BYTE,
+    .mem_data_align    = LL_DMA_MDATAALIGN_BYTE,
+    .periph_inc        = LL_DMA_PERIPH_NOINCREMENT,
+    .mem_inc           = LL_DMA_MEMORY_INCREMENT,
+    .use_fifo          = false,
+    .fifo_threshold    = 0U,
+    .irqn              = DMA1_Stream3_IRQn,
+    .irq_priority      = 4U,
+};
+
+DC_Uart_Handle dc2_handle = {
+    .cfg         = &dc2_uart_cfg,
+    .dma_rx      = &dc2_dma_rx_cfg,
+    .rx_buf      = dc2_rx_dma_buf,
+    .rx_buf_size = DC_UART_RX_BUF_SIZE,
+    .parser      = NULL,
+    .rx_head     = 0U,
+    .is_apb2     = false,
+    .dc_index    = 2U,
+};
+
+/* ---- DC3: USART3 on PB10/PB11 (AF7) ---- */
+
+const USART_Config dc3_uart_cfg = {
+    .tx_pin = {
+        .clk    = LL_AHB4_GRP1_PERIPH_GPIOB,
+        .port   = GPIOB,
+        .pin    = LL_GPIO_PIN_10,
+        .mode   = LL_GPIO_MODE_ALTERNATE,
+        .af     = LL_GPIO_AF_7,
+        .speed  = LL_GPIO_SPEED_FREQ_VERY_HIGH,
+        .pull   = LL_GPIO_PULL_NO,
+        .output = LL_GPIO_OUTPUT_PUSHPULL,
+    },
+    .rx_pin = {
+        .clk    = LL_AHB4_GRP1_PERIPH_GPIOB,
+        .port   = GPIOB,
+        .pin    = LL_GPIO_PIN_11,
+        .mode   = LL_GPIO_MODE_ALTERNATE,
+        .af     = LL_GPIO_AF_7,
+        .speed  = LL_GPIO_SPEED_FREQ_VERY_HIGH,
+        .pull   = LL_GPIO_PULL_UP,
+        .output = LL_GPIO_OUTPUT_PUSHPULL,
+    },
+    .peripheral        = USART3,
+    .bus_clk_enable    = LL_APB1_GRP1_PERIPH_USART3,
+    .kernel_clk_source = LL_RCC_USART234578_CLKSOURCE_PLL2Q,
+    .prescaler         = LL_USART_PRESCALER_DIV1,
+    .baudrate          = 115200U,
+    .data_width        = LL_USART_DATAWIDTH_8B,
+    .stop_bits         = LL_USART_STOPBITS_1,
+    .parity            = LL_USART_PARITY_NONE,
+    .direction         = LL_USART_DIRECTION_TX_RX,
+    .hw_flow_control   = LL_USART_HWCONTROL_NONE,
+    .oversampling      = LL_USART_OVERSAMPLING_16,
+    .kernel_clk_hz     = 128000000UL,
+    .irqn              = USART3_IRQn,
+    .irq_priority      = 5U,
+};
+
+const DMA_ChannelConfig dc3_dma_rx_cfg = {
+    .dma_clk_enable    = LL_AHB1_GRP1_PERIPH_DMA1,
+    .dma               = DMA1,
+    .stream            = LL_DMA_STREAM_4,
+    .request           = LL_DMAMUX1_REQ_USART3_RX,
+    .direction         = LL_DMA_DIRECTION_PERIPH_TO_MEMORY,
+    .mode              = LL_DMA_MODE_CIRCULAR,
+    .priority          = LL_DMA_PRIORITY_HIGH,
+    .periph_data_align = LL_DMA_PDATAALIGN_BYTE,
+    .mem_data_align    = LL_DMA_MDATAALIGN_BYTE,
+    .periph_inc        = LL_DMA_PERIPH_NOINCREMENT,
+    .mem_inc           = LL_DMA_MEMORY_INCREMENT,
+    .use_fifo          = false,
+    .fifo_threshold    = 0U,
+    .irqn              = DMA1_Stream4_IRQn,
+    .irq_priority      = 4U,
+};
+
+DC_Uart_Handle dc3_handle = {
+    .cfg         = &dc3_uart_cfg,
+    .dma_rx      = &dc3_dma_rx_cfg,
+    .rx_buf      = dc3_rx_dma_buf,
+    .rx_buf_size = DC_UART_RX_BUF_SIZE,
+    .parser      = NULL,
+    .rx_head     = 0U,
+    .is_apb2     = false,
+    .dc_index    = 3U,
+};
+
+/* ---- DC4: UART4 on PC10/PC11 (AF8) ---- */
+
+const USART_Config dc4_uart_cfg = {
+    .tx_pin = {
+        .clk    = LL_AHB4_GRP1_PERIPH_GPIOC,
+        .port   = GPIOC,
+        .pin    = LL_GPIO_PIN_10,
+        .mode   = LL_GPIO_MODE_ALTERNATE,
+        .af     = LL_GPIO_AF_8,
+        .speed  = LL_GPIO_SPEED_FREQ_VERY_HIGH,
+        .pull   = LL_GPIO_PULL_NO,
+        .output = LL_GPIO_OUTPUT_PUSHPULL,
+    },
+    .rx_pin = {
+        .clk    = LL_AHB4_GRP1_PERIPH_GPIOC,
+        .port   = GPIOC,
+        .pin    = LL_GPIO_PIN_11,
+        .mode   = LL_GPIO_MODE_ALTERNATE,
+        .af     = LL_GPIO_AF_8,
+        .speed  = LL_GPIO_SPEED_FREQ_VERY_HIGH,
+        .pull   = LL_GPIO_PULL_UP,
+        .output = LL_GPIO_OUTPUT_PUSHPULL,
+    },
+    .peripheral        = UART4,
+    .bus_clk_enable    = LL_APB1_GRP1_PERIPH_UART4,
+    .kernel_clk_source = LL_RCC_USART234578_CLKSOURCE_PLL2Q,
+    .prescaler         = LL_USART_PRESCALER_DIV1,
+    .baudrate          = 115200U,
+    .data_width        = LL_USART_DATAWIDTH_8B,
+    .stop_bits         = LL_USART_STOPBITS_1,
+    .parity            = LL_USART_PARITY_NONE,
+    .direction         = LL_USART_DIRECTION_TX_RX,
+    .hw_flow_control   = LL_USART_HWCONTROL_NONE,
+    .oversampling      = LL_USART_OVERSAMPLING_16,
+    .kernel_clk_hz     = 128000000UL,
+    .irqn              = UART4_IRQn,
+    .irq_priority      = 5U,
+};
+
+const DMA_ChannelConfig dc4_dma_rx_cfg = {
+    .dma_clk_enable    = LL_AHB1_GRP1_PERIPH_DMA1,
+    .dma               = DMA1,
+    .stream            = LL_DMA_STREAM_5,
+    .request           = LL_DMAMUX1_REQ_UART4_RX,
+    .direction         = LL_DMA_DIRECTION_PERIPH_TO_MEMORY,
+    .mode              = LL_DMA_MODE_CIRCULAR,
+    .priority          = LL_DMA_PRIORITY_HIGH,
+    .periph_data_align = LL_DMA_PDATAALIGN_BYTE,
+    .mem_data_align    = LL_DMA_MDATAALIGN_BYTE,
+    .periph_inc        = LL_DMA_PERIPH_NOINCREMENT,
+    .mem_inc           = LL_DMA_MEMORY_INCREMENT,
+    .use_fifo          = false,
+    .fifo_threshold    = 0U,
+    .irqn              = DMA1_Stream5_IRQn,
+    .irq_priority      = 4U,
+};
+
+DC_Uart_Handle dc4_handle = {
+    .cfg         = &dc4_uart_cfg,
+    .dma_rx      = &dc4_dma_rx_cfg,
+    .rx_buf      = dc4_rx_dma_buf,
+    .rx_buf_size = DC_UART_RX_BUF_SIZE,
+    .parser      = NULL,
+    .rx_head     = 0U,
+    .is_apb2     = false,
+    .dc_index    = 4U,
+};
+
+/* ==========================================================================
  *  USB2517I STRAPPING PINS
  *
  *  CFG_SEL1 (PG1, Pin 66) and CFG_SEL2 (PG0, Pin 63) must be driven
