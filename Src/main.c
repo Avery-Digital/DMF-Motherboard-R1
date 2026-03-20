@@ -366,18 +366,20 @@ static void OnDC_PacketReceived(const PacketHeader *header,
  *  DAUGHTERCARD LIST COMMAND EXECUTION — main loop context only
  *
  *  Processes SET_LIST_OF_SW (0x0B51) and GET_LIST_OF_SW (0x0B52) by
- *  iterating through each group in the payload, forwarding individual
- *  switch commands to the target daughtercard, waiting for each response,
- *  and building an aggregate response for the GUI.
+ *  batching groups by boardID and forwarding one bulk packet per board.
+ *
+ *  Algorithm:
+ *    1. Scan all groups, bucket by boardID (0–3)
+ *    2. For each non-empty bucket, build a single SET_LIST_OF_SW or
+ *       GET_LIST_OF_SW packet containing all that board's groups
+ *    3. Send to the correct DC UART, wait for response (10ms timeout)
+ *    4. Collect responses, send aggregate back to GUI
  *
  *  SET groups: 5 bytes each [boardID][bank][SW_hi][SW_lo][state]
- *   → forwards as SetSingleSwitch (0x0A10) with payload [boardID][bank][SW_hi][SW_lo][state]
- *
  *  GET groups: 4 bytes each [boardID][bank][SW_hi][SW_lo]
- *   → forwards as GetSingleSwitch (0x0A11) with payload [boardID][bank][SW_hi][SW_lo]
  *
- *  This function BLOCKS the main loop until all groups are processed.
- *  Each round-trip is ~3.4 ms (UART + SPI), timeout is 10 ms per group.
+ *  This function BLOCKS the main loop until all boards are processed.
+ *  At most 4 round-trips (one per board), each ~3.4 ms + switch time.
  * ========================================================================== */
 void Command_ExecuteDcList(void)
 {
@@ -385,47 +387,59 @@ void Command_ExecuteDcList(void)
     const uint16_t total_len  = dc_list_request.length;
     const uint8_t  mode       = dc_list_request.mode;
 
-    /* Determine group size and forwarded command code */
+    /* Determine group size and command code to forward */
     uint8_t group_size;
     uint8_t fwd_cmd1, fwd_cmd2;
 
     if (mode == DC_LIST_MODE_SET) {
         group_size = DC_SET_GROUP_SIZE;  /* 5 */
-        fwd_cmd1   = 0x0AU;
-        fwd_cmd2   = 0x10U;             /* SetSingleSwitch */
+        fwd_cmd1   = 0x0BU;
+        fwd_cmd2   = 0x51U;             /* SET_LIST_OF_SW */
     } else {
         group_size = DC_GET_GROUP_SIZE;  /* 4 */
-        fwd_cmd1   = 0x0AU;
-        fwd_cmd2   = 0x11U;             /* GetSingleSwitch */
+        fwd_cmd1   = 0x0BU;
+        fwd_cmd2   = 0x52U;             /* GET_LIST_OF_SW */
     }
 
-    /* Calculate number of groups */
     uint16_t num_groups = total_len / group_size;
     if (num_groups == 0U) return;
 
-    /* Aggregate response buffer.
-     * For SET: 3 bytes per group [status_1][status_2][boardID]
-     * For GET: we collect full responses from each daughtercard.
-     * We'll use a simple status-per-group approach for both. */
-    static uint8_t agg_payload[PKT_MAX_PAYLOAD];
-    uint16_t agg_len    = 0U;
-    bool     any_error  = false;
+    /* Per-board batch buffers — collect groups destined for each board */
+    static uint8_t batch_buf[DC_MAX_BOARDS][PKT_MAX_PAYLOAD];
+    uint16_t batch_len[DC_MAX_BOARDS] = {0};
 
-    /* Signal ISR to use mailbox instead of tx_request */
-    dc_list_active = true;
-
+    /* Sort groups into per-board buckets */
     for (uint16_t g = 0U; g < num_groups; g++) {
         const uint8_t *group = &data[g * group_size];
         uint8_t board_id     = group[0];
 
-        /* Validate boardID */
-        DC_Uart_Handle *dc = DC_GetHandle(board_id);
+        if (board_id < DC_MAX_BOARDS) {
+            uint16_t len = batch_len[board_id];
+            if (len + group_size <= PKT_MAX_PAYLOAD) {
+                memcpy(&batch_buf[board_id][len], group, group_size);
+                batch_len[board_id] += group_size;
+            }
+        }
+    }
+
+    /* Aggregate response buffer */
+    static uint8_t agg_payload[PKT_MAX_PAYLOAD];
+    uint16_t agg_len   = 0U;
+    bool     any_error = false;
+
+    /* Signal ISR to use mailbox instead of tx_request */
+    dc_list_active = true;
+
+    /* Send one batched packet per board */
+    for (uint8_t bid = 0U; bid < DC_MAX_BOARDS; bid++) {
+        if (batch_len[bid] == 0U) continue;
+
+        DC_Uart_Handle *dc = DC_GetHandle(bid);
         if (dc == NULL) {
-            /* Invalid boardID — record error, continue */
             if (agg_len + 3U <= PKT_MAX_PAYLOAD) {
-                agg_payload[agg_len++] = 0x00U;         /* status_1 */
-                agg_payload[agg_len++] = 0x02U;         /* status_2: bad board */
-                agg_payload[agg_len++] = board_id;       /* boardID */
+                agg_payload[agg_len++] = 0x00U;     /* status_1 */
+                agg_payload[agg_len++] = 0x02U;     /* status_2: bad board */
+                agg_payload[agg_len++] = bid;        /* boardID */
             }
             any_error = true;
             continue;
@@ -434,19 +448,19 @@ void Command_ExecuteDcList(void)
         /* Clear the response mailbox */
         dc_response.ready = false;
 
-        /* Forward this group's data as a single-switch command.
-         * The payload sent to the daughtercard is the group itself
-         * (boardID + bank + SW + state/nothing). */
+        /* Forward the entire batch as a single list command */
         DC_Uart_SendPacket(dc,
                            dc_list_request.msg1,
                            dc_list_request.msg2,
                            fwd_cmd1, fwd_cmd2,
-                           group, group_size);
+                           batch_buf[bid], batch_len[bid]);
 
-        /* Wait for response with timeout */
+        /* Wait for response with timeout.
+         * Batched list commands may process many switches (~3.4 ms each),
+         * so use the longer DC_LIST_TIMEOUT instead of DC_RESPONSE_TIMEOUT. */
         uint32_t t0 = LL_GetTick();
         while (!dc_response.ready) {
-            if ((LL_GetTick() - t0) >= DC_RESPONSE_TIMEOUT) {
+            if ((LL_GetTick() - t0) >= DC_LIST_TIMEOUT) {
                 break;
             }
         }
@@ -460,11 +474,11 @@ void Command_ExecuteDcList(void)
             }
             dc_response.ready = false;
         } else {
-            /* Timeout — record error for this group */
+            /* Timeout — record error for this board */
             if (agg_len + 3U <= PKT_MAX_PAYLOAD) {
-                agg_payload[agg_len++] = 0x00U;         /* status_1 */
-                agg_payload[agg_len++] = 0x05U;         /* status_2: timeout */
-                agg_payload[agg_len++] = board_id;       /* boardID */
+                agg_payload[agg_len++] = 0x00U;     /* status_1 */
+                agg_payload[agg_len++] = 0x05U;     /* status_2: timeout */
+                agg_payload[agg_len++] = bid;        /* boardID */
             }
             any_error = true;
         }
