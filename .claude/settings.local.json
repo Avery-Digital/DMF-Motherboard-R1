@@ -15,7 +15,20 @@
       "Bash(python -c \"\nimport sys, fitz\nsys.stdout.reconfigure\\(encoding='utf-8'\\)\ndoc = fitz.open\\('C:/Firmware Projects/DMF-Motherboard-R1/Datasheets/USB HUB - USB2517I-JZX.pdf'\\)\npage = doc[15]  # page 16\ntext = page.get_text\\(\\)\nprint\\(text[:5000]\\)\n\")",
       "Bash(python -c \"\nimport sys, fitz\nsys.stdout.reconfigure\\(encoding='utf-8'\\)\ndoc = fitz.open\\('C:/Firmware Projects/DMF-Motherboard-R1/Datasheets/POWER LOAD SWITCHES - VN5T016AHTR-E.pdf'\\)\nprint\\(f'Pages: {len\\(doc\\)}'\\)\nfor page_num in range\\(min\\(20, len\\(doc\\)\\)\\):\n    page = doc[page_num]\n    text = page.get_text\\(\\)\n    lower = text.lower\\(\\)\n    if any\\(k in lower for k in ['input', 'current', 'pull-down', 'pull down', 'iin', 'threshold', 'hysteresis', 'enable', 'turn on', 'turn-on', 'drive', 'logic']\\):\n        print\\(f'\\\\n--- PAGE {page_num+1} ---'\\)\n        print\\(text[:4000]\\)\n\")",
       "Bash(find \"C:/Firmware Projects/DMF-Motherboard-R1\" -name \"*.h\" -path \"*/Drivers/*\" 2>/dev/null | head -10)",
-      "Bash(find 'C:/Firmware Projects' -name *.h -type f)"
+      "Bash(find 'C:/Firmware Projects' -name *.h -type f)",
+      "Bash(python -c \"\nimport math\nR = 10000  # 10k ohms\nC = 10e-6  # 10uF\nfc = 1 / \\(2 * math.pi * R * C\\)\nprint\\(f'Cutoff frequency: {fc:.2f} Hz'\\)\n\")",
+      "Bash(find \"C:/Firmware Projects/DMF-Motherboard-R1/\" -name \"stm32h7xx_ll_dma*\" -o -name \"stm32h7xx_ll_rcc*\" 2>/dev/null | head -10)",
+      "Bash(find '/c/Firmware Projects/DMF-DriverBoard-Firmware' -iname *datasheet* -o -iname *AD73* -o -iname *AD7380*)",
+      "Bash(where pdftoppm:*)",
+      "Bash(where magick:*)",
+      "Bash(where gswin64c:*)",
+      "Bash(where python:*)",
+      "Bash(where choco:*)",
+      "Bash(where scoop:*)",
+      "Bash(where winget:*)",
+      "Bash(winget install:*)",
+      "Bash(pip install:*)",
+      "Bash(python:*)"
     ]
   }
 }
