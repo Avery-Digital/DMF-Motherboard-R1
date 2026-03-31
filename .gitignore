@@ -401,3 +401,6 @@ FodyWeavers.xsd
 *.sln.iml
 .settings/language.settings.xml
 .claude/settings.local.json
+
+# Datasheets (PDFs too large for GitHub)
+Datasheets/

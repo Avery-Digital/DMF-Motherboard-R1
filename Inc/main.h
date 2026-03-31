@@ -83,6 +83,23 @@ typedef struct {
     uint8_t         cmd1, cmd2;
 } DcResponse;
 
+/* =================== Gantry RS485 Request ================================ */
+
+/**
+ * @brief  Deferred request to send an ASCII command to the gantry via RS485.
+ *         ISR copies the payload string, main loop calls RS485_SendCommand().
+ */
+typedef struct {
+    volatile bool   pending;
+    uint8_t         msg1, msg2, cmd1, cmd2;
+    char            cmd_str[GANTRY_RESPONSE_MAX];   /**< Null-terminated ASCII cmd */
+    uint16_t        cmd_len;
+} GantryRequest;
+
+extern GantryRequest    gantry_request;
+
+void Command_ExecuteGantry(void);
+
 #define DC_LIST_MODE_SET    1U      /**< SET_LIST_OF_SW (5-byte groups)      */
 #define DC_LIST_MODE_GET    2U      /**< GET_LIST_OF_SW (4-byte groups)      */
 #define DC_RESPONSE_TIMEOUT 10U     /**< Timeout in ms for async responses   */

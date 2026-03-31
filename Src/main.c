@@ -39,6 +39,7 @@
 #include "ADS7066.h"
 #include "VN5T016AH.h"
 #include "DC_Uart_Driver.h"
+#include "RS485_Driver.h"
 #include <string.h>
 #include "stm32h7xx_ll_rtc.h"
 #include "spi_driver.h"
@@ -62,6 +63,9 @@ DcForwardRequest dc_forward_request = {0};
 
 /* Daughtercard list request — synchronous, per-group sequential */
 DcListRequest    dc_list_request    = {0};
+
+/* Gantry RS485 request — deferred to main loop */
+GantryRequest    gantry_request     = {0};
 
 /* Response mailbox for synchronous DC operations */
 DcResponse       dc_response        = {0};
@@ -129,6 +133,12 @@ int main(void)
                                        dc_forward_request.payload,
                                        dc_forward_request.length);
                 }
+            }
+
+            /* Forward a gantry command via RS485 (polled, ~50 ms) */
+            if (gantry_request.pending) {
+                gantry_request.pending = false;
+                Command_ExecuteGantry();
             }
 
             /* Execute SET_LIST_OF_SW / GET_LIST_OF_SW — synchronous, blocking */
@@ -249,6 +259,12 @@ static void SystemInit_Sequence(void)
      *         No SMBus config needed — hub attaches automatically after POR. */
     USB2517_SetStrapPins();
     LL_mDelay(100);  /* Give USB2517 time to exit POR and attach */
+
+    /* Step 7a: RS485 — USART7 + MAX485 for gantry communication.
+     *          9600 baud, polled TX/RX, half-duplex direction on PF8. */
+    if (RS485_Init(&rs485_handle) != INIT_OK) {
+        Error_Handler(0x70);
+    }
 
     /* Step 8: Protocol parser — register the packet callback */
     Protocol_ParserInit(&usart10_parser, OnPacketReceived, NULL);

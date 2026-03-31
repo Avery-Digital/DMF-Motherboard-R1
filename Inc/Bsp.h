@@ -278,6 +278,26 @@ typedef struct {
     uint8_t                    dc_index;
 } DC_Uart_Handle;
 
+/* ====================== RS485 Configuration ================================ */
+
+/**
+ * @brief  RS485 half-duplex transceiver config (MAX485 uMAX).
+ *         Reuses USART_Config for the USART7 peripheral and adds
+ *         a DE/RE direction-control GPIO pin.
+ */
+typedef struct {
+    USART_Config    usart;          /**< USART7 peripheral config             */
+    PinConfig       de_re_pin;      /**< DE/RE direction GPIO (PF8)           */
+} RS485_Config;
+
+/**
+ * @brief  Mutable runtime state for the RS485 driver.
+ */
+typedef struct {
+    const RS485_Config *cfg;
+    bool                initialised;
+} RS485_Handle;
+
 /* =========================== SPI Configuration ============================ */
 
 /**
@@ -492,6 +512,13 @@ extern DC_Uart_Handle           dc3_handle;
 extern const USART_Config       dc4_uart_cfg;       /* UART4, PC10 TX / PC11 RX */
 extern const DMA_ChannelConfig  dc4_dma_rx_cfg;     /* DMA1 Stream 5 */
 extern DC_Uart_Handle           dc4_handle;
+
+/* RS485 — USART7 + MAX485 for gantry communication
+ *   TX  : PF7  (Pin 27, USART7_TX, AF7)
+ *   RX  : PF6  (Pin 26, USART7_RX, AF7)
+ *   DE/RE: PF8 (Pin 28, GPIO, tied RE+DE) */
+extern const RS485_Config       rs485_cfg;
+extern RS485_Handle             rs485_handle;
 
 /* USB2517I strapping pins */
 extern const PinConfig          usb2517_reset_n_pin;    /* PC13 — Pin 9  */

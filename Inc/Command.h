@@ -71,6 +71,20 @@ extern "C" {
 #define CMD_THERM5          CMD_CODE(0x0C, 0x24)    /**< Thermistor 5 (inst3, ch4) */
 #define CMD_THERM6          CMD_CODE(0x0C, 0x25)    /**< Thermistor 6 (inst3, ch5) */
 
+/* ---- Gantry RS485 Command (0x0C30) ----
+ *
+ *  Payload: ASCII command string (e.g. "@01VER"), no null terminator.
+ *  The firmware appends the null and forwards via RS485 to the gantry.
+ *  Response payload: ASCII response string from gantry (no null).
+ *  If the gantry does not respond, payload is "TIMEOUT".
+ *
+ *  Deferred to main loop (RS485 is polled, ~50 ms round trip at 9600).
+ */
+#define CMD_GANTRY_CMD      CMD_CODE(0x0C, 0x30)    /**< Gantry RS485 passthrough */
+
+#define GANTRY_RESPONSE_MAX  128U   /**< Max ASCII response bytes from gantry */
+#define GANTRY_TIMEOUT_MS    500U   /**< RS485 response timeout               */
+
 /* ---- Board Identity Command (0x0C99) ----
  *
  *  Returns a fixed board type identifier so the host can distinguish

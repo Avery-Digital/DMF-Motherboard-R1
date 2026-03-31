@@ -13,6 +13,7 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "bsp.h"
+#include "RS485_Driver.h"
 #include <stddef.h>
 
 /* ==========================================================================
@@ -1161,6 +1162,81 @@ ADS7066_Handle ads7066_3_handle = {
     .cfg             = &ads7066_3_cfg,
     .initialised     = false,
     .current_channel = 0U,
+};
+
+/* ==========================================================================
+ *  RS485 CONFIGURATION — USART7 + MAX485 (uMAX)
+ *
+ *  PF7 (USART7_TX, AF7)  → MAX485 DI  (pin 6)
+ *  PF6 (USART7_RX, AF7)  → MAX485 RO  (pin 3)
+ *  PF8 (GPIO output)      → MAX485 RE+DE (pins 4+5, tied)
+ *
+ *  USART7 is on APB1.
+ *  Kernel clock source: PLL2Q = 128 MHz.
+ *  Baud: 9600 (gantry default).
+ * ========================================================================== */
+const RS485_Config rs485_cfg = {
+    .usart = {
+        /* TX — PF7, Pin 27 */
+        .tx_pin = {
+            .clk        = LL_AHB4_GRP1_PERIPH_GPIOF,
+            .port       = GPIOF,
+            .pin        = LL_GPIO_PIN_7,
+            .mode       = LL_GPIO_MODE_ALTERNATE,
+            .af         = LL_GPIO_AF_7,
+            .speed      = LL_GPIO_SPEED_FREQ_VERY_HIGH,
+            .pull       = LL_GPIO_PULL_NO,
+            .output     = LL_GPIO_OUTPUT_PUSHPULL,
+        },
+
+        /* RX — PF6, Pin 26 */
+        .rx_pin = {
+            .clk        = LL_AHB4_GRP1_PERIPH_GPIOF,
+            .port       = GPIOF,
+            .pin        = LL_GPIO_PIN_6,
+            .mode       = LL_GPIO_MODE_ALTERNATE,
+            .af         = LL_GPIO_AF_7,
+            .speed      = LL_GPIO_SPEED_FREQ_VERY_HIGH,
+            .pull       = LL_GPIO_PULL_UP,      /* Pull-up on RX to idle high */
+            .output     = LL_GPIO_OUTPUT_PUSHPULL,
+        },
+
+        /* USART7 peripheral */
+        .peripheral         = UART7,
+        .bus_clk_enable     = LL_APB1_GRP1_PERIPH_UART7,
+        .kernel_clk_source  = LL_RCC_USART234578_CLKSOURCE_PLL2Q,
+        .prescaler          = LL_USART_PRESCALER_DIV1,
+        .baudrate           = 9600U,
+        .data_width         = LL_USART_DATAWIDTH_8B,
+        .stop_bits          = LL_USART_STOPBITS_1,
+        .parity             = LL_USART_PARITY_NONE,
+        .direction          = LL_USART_DIRECTION_TX_RX,
+        .hw_flow_control    = LL_USART_HWCONTROL_NONE,
+        .oversampling       = LL_USART_OVERSAMPLING_16,
+
+        .kernel_clk_hz      = 128000000UL,     /* PLL2Q */
+
+        /* No interrupts needed for polled driver */
+        .irqn               = UART7_IRQn,
+        .irq_priority       = 8U,
+    },
+
+    /* DE/RE direction pin — PF8, Pin 28 */
+    .de_re_pin = {
+        .clk        = LL_AHB4_GRP1_PERIPH_GPIOF,
+        .port       = GPIOF,
+        .pin        = LL_GPIO_PIN_8,
+        .mode       = LL_GPIO_MODE_OUTPUT,
+        .af         = 0U,
+        .speed      = LL_GPIO_SPEED_FREQ_VERY_HIGH,
+        .pull       = LL_GPIO_PULL_DOWN,        /* Default LOW = receive mode */
+        .output     = LL_GPIO_OUTPUT_PUSHPULL,
+    },
+};
+
+RS485_Handle rs485_handle = {
+    .cfg         = &rs485_cfg,
+    .initialised = false,
 };
 
 /* ==========================================================================

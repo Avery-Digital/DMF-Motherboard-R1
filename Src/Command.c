@@ -24,6 +24,8 @@
 #include "DC_Uart_Driver.h"
 #include "bsp.h"
 #include <string.h>
+#include "Thermistor.h"
+#include "RS485_Driver.h"
 
 /* Private handler prototypes ------------------------------------------------*/
 static void Command_HandlePing(USART_Handle *handle,
@@ -60,6 +62,10 @@ static void Command_HandleDcSetList(const PacketHeader *header,
 
 static void Command_HandleDcGetList(const PacketHeader *header,
                                      const uint8_t *payload);
+
+static void Command_HandleGantry(USART_Handle *handle,
+                                  const PacketHeader *header,
+                                  const uint8_t *payload);
 
 /* ==========================================================================
  *  COMMAND DISPATCH
@@ -138,6 +144,11 @@ void Command_Dispatch(USART_Handle *handle,
         break;
     case CMD_THERM6:
         Command_HandleThermistor(handle, header, payload, 5);
+        break;
+
+    /* ---- Gantry RS485 Passthrough (0x0C30) ---- */
+    case CMD_GANTRY_CMD:
+        Command_HandleGantry(handle, header, payload);
         break;
 
     /* ---- Board Identity (0x0C99) ---- */
@@ -379,11 +390,9 @@ static void Command_HandleLoadSwitch(USART_Handle *handle,
  *  Reads ADS7066 instance 3 on the specified channel (0–5).
  *  Each channel is connected to a thermistor circuit.
  *
- *  Response payload (2 bytes):
- *    Byte 0 — ADC result bits [7:0]  (LSB)
- *    Byte 1 — ADC result bits [15:8] (MSB)
- *
- *  On error, both bytes are set to 0xFF.
+ *  Response payload (4 bytes):
+ *    IEEE 754 float, little-endian — temperature in degrees C.
+ *    Returns NaN on read error or if the thermistor is absent.
  * ========================================================================== */
 static void Command_HandleThermistor(USART_Handle *handle,
                                       const PacketHeader *header,
@@ -394,18 +403,20 @@ static void Command_HandleThermistor(USART_Handle *handle,
     (void)payload;
 
     uint16_t adc_result = 0U;
-    uint8_t  response[2];
+    float    temp_c;
 
     ADS7066_Status status = ADS7066_ReadChannel(&ads7066_3_handle,
                                                  channel, &adc_result);
 
     if (status == ADS7066_OK) {
-        response[0] = (uint8_t)( adc_result       & 0xFFU);
-        response[1] = (uint8_t)((adc_result >> 8U) & 0xFFU);
+        temp_c = Thermistor_AdcToTempC(adc_result);
     } else {
-        response[0] = 0xFFU;
-        response[1] = 0xFFU;
+        uint32_t nan_bits = 0x7FC00000U;
+        memcpy(&temp_c, &nan_bits, sizeof(temp_c));
     }
+
+    uint8_t response[4];
+    memcpy(response, &temp_c, sizeof(float));
 
     tx_request.msg1    = header->msg1;
     tx_request.msg2    = header->msg2;
@@ -524,4 +535,63 @@ static void Command_HandleDcGetList(const PacketHeader *header,
     memcpy(dc_list_request.payload, payload, header->length);
     dc_list_request.length = header->length;
     dc_list_request.pending = true;  /* Must be last */
+}
+
+/* ==========================================================================
+ *  GANTRY RS485 PASSTHROUGH (0x0C30) — ISR context, deferred to main loop
+ *
+ *  GUI sends an ASCII command string as the payload (no null terminator).
+ *  The ISR copies it into gantry_request, the main loop forwards via RS485
+ *  and returns the gantry's response as the packet payload.
+ * ========================================================================== */
+static void Command_HandleGantry(USART_Handle *handle,
+                                  const PacketHeader *header,
+                                  const uint8_t *payload)
+{
+    (void)handle;
+
+    if (header->length == 0U || payload == NULL) return;
+
+    uint16_t len = header->length;
+    if (len >= GANTRY_RESPONSE_MAX) len = GANTRY_RESPONSE_MAX - 1U;
+
+    gantry_request.msg1 = header->msg1;
+    gantry_request.msg2 = header->msg2;
+    gantry_request.cmd1 = header->cmd1;
+    gantry_request.cmd2 = header->cmd2;
+    memcpy(gantry_request.cmd_str, payload, len);
+    gantry_request.cmd_str[len] = '\0';     /* Null-terminate for RS485 */
+    gantry_request.cmd_len = len;
+    gantry_request.pending = true;          /* Must be last */
+}
+
+/* ==========================================================================
+ *  Command_ExecuteGantry — main loop context only
+ *
+ *  Sends the buffered ASCII command via RS485 and waits for a response.
+ *  Returns the gantry's ASCII response as the packet payload.
+ * ========================================================================== */
+void Command_ExecuteGantry(void)
+{
+    char response[GANTRY_RESPONSE_MAX];
+
+    uint16_t len = RS485_SendCommand(&rs485_handle,
+                                      gantry_request.cmd_str,
+                                      response,
+                                      sizeof(response),
+                                      GANTRY_TIMEOUT_MS);
+
+    if (len == 0U) {
+        /* Timeout — send "TIMEOUT" as the response */
+        memcpy(response, "TIMEOUT", 7);
+        len = 7U;
+    }
+
+    tx_request.msg1   = gantry_request.msg1;
+    tx_request.msg2   = gantry_request.msg2;
+    tx_request.cmd1   = gantry_request.cmd1;
+    tx_request.cmd2   = gantry_request.cmd2;
+    memcpy(tx_request.payload, response, len);
+    tx_request.length = len;
+    tx_request.pending = true;
 }
