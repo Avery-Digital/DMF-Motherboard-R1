@@ -24,6 +24,7 @@ extern "C" {
 #include <stdint.h>
 #include <stdbool.h>
 #include "packet_protocol.h"
+#include "command.h"
 
 typedef struct {
     volatile bool   pending;
