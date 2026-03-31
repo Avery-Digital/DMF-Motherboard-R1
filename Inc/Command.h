@@ -71,6 +71,20 @@ extern "C" {
 #define CMD_THERM5          CMD_CODE(0x0C, 0x24)    /**< Thermistor 5 (inst3, ch4) */
 #define CMD_THERM6          CMD_CODE(0x0C, 0x25)    /**< Thermistor 6 (inst3, ch5) */
 
+/* ---- Board Identity Command (0x0C99) ----
+ *
+ *  Returns a fixed board type identifier so the host can distinguish
+ *  the motherboard from a driverboard.
+ *  Response: [0x00][0x00][0xFF][0xMB][0x01]
+ *    0xMB 0x01 = Motherboard Rev 1
+ *  Compare: driverboard GET_BOARD_TYPE (0x0B99) returns 0xCA 0xCA
+ */
+#define CMD_GET_BOARD_TYPE  CMD_CODE(0x0C, 0x99)    /**< Motherboard board ID    */
+
+/* Motherboard identifier bytes */
+#define MB_BOARD_ID_1       0x4DU   /**< 'M' */
+#define MB_BOARD_ID_2       0x42U   /**< 'B' */
+
 /* ---- Daughtercard (Driverboard) Command Routing ----
  *
  *  Commands in the 0x0A00–0x0BFF range are driverboard commands.

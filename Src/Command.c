@@ -48,6 +48,10 @@ static void Command_HandleThermistor(USART_Handle *handle,
                                       const uint8_t *payload,
                                       uint8_t channel);
 
+static void Command_HandleGetBoardType(USART_Handle *handle,
+                                        const PacketHeader *header,
+                                        const uint8_t *payload);
+
 static void Command_HandleDcForward(const PacketHeader *header,
                                      const uint8_t *payload);
 
@@ -134,6 +138,11 @@ void Command_Dispatch(USART_Handle *handle,
         break;
     case CMD_THERM6:
         Command_HandleThermistor(handle, header, payload, 5);
+        break;
+
+    /* ---- Board Identity (0x0C99) ---- */
+    case CMD_GET_BOARD_TYPE:
+        Command_HandleGetBoardType(handle, header, payload);
         break;
 
     /* ---- Driverboard Debug Command (0xBEEF) ---- */
@@ -397,6 +406,44 @@ static void Command_HandleThermistor(USART_Handle *handle,
         response[0] = 0xFFU;
         response[1] = 0xFFU;
     }
+
+    tx_request.msg1    = header->msg1;
+    tx_request.msg2    = header->msg2;
+    tx_request.cmd1    = header->cmd1;
+    tx_request.cmd2    = header->cmd2;
+    memcpy(tx_request.payload, response, sizeof(response));
+    tx_request.length  = sizeof(response);
+    tx_request.pending = true;  /* Must be last — acts as the commit */
+}
+
+/* ==========================================================================
+ *  CMD_GET_BOARD_TYPE (0x0C99) — ISR context
+ *
+ *  Returns a fixed identifier so the host can distinguish the motherboard
+ *  from a driverboard.  Mirrors the driverboard's GET_BOARD_TYPE (0x0B99)
+ *  but with a different code and identifier.
+ *
+ *  Response payload (5 bytes):
+ *    Byte 0 — 0x00 (status_1)
+ *    Byte 1 — 0x00 (status_2: success)
+ *    Byte 2 — 0xFF (boardID placeholder)
+ *    Byte 3 — 0x4D ('M')
+ *    Byte 4 — 0x42 ('B')
+ * ========================================================================== */
+static void Command_HandleGetBoardType(USART_Handle *handle,
+                                        const PacketHeader *header,
+                                        const uint8_t *payload)
+{
+    (void)handle;
+    (void)payload;
+
+    uint8_t response[5] = {
+        0x00U,              /* status_1 */
+        0x00U,              /* status_2: success */
+        0xFFU,              /* boardID (0xFF = motherboard) */
+        MB_BOARD_ID_1,      /* 'M' (0x4D) */
+        MB_BOARD_ID_2,      /* 'B' (0x42) */
+    };
 
     tx_request.msg1    = header->msg1;
     tx_request.msg2    = header->msg2;
