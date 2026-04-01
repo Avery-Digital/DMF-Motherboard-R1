@@ -24,6 +24,20 @@
 
 DMA assignments: DMA1 Stream 2 (DC1 RX), Stream 3 (DC2 RX), Stream 4 (DC3 RX), Stream 5 (DC4 RX). TX is polled.
 
+### USART7 — RS485 Gantry Communication (via MAX485 uMAX)
+
+| Pin # | Port.Pin | Function | AF | Direction | Config | Connected To |
+|-------|----------|----------|-----|-----------|--------|-------------|
+| 26 | PF6 | USART7_RX | AF7 | Input | Pull-up, Very High speed | MAX485 RO (pin 3) |
+| 27 | PF7 | USART7_TX | AF7 | Output | Push-pull, Very High speed | MAX485 DI (pin 6) |
+| 28 | PF8 | DE/RE GPIO | — | Output | Push-pull, Pull-up, Very High speed | NOT gate → MAX485 RE+DE (pins 4+5 tied) |
+
+**Note:** PF8 passes through an inverter (NOT gate) before reaching the MAX485. PF8 LOW = transmit (DE HIGH), PF8 HIGH = receive (RE LOW). The driver logic in RS485_Driver.c is inverted to account for this.
+
+**MAX485 uMAX Pinout:** 1=B, 2=VCC, 3=RO, 4=RE, 5=DE, 6=DI, 7=GND, 8=A
+
+**Known issue:** MAX485 VCC is 3.3V on this board revision (out of spec, requires 4.75–5.25V). Needs 5V bodge wire for reliable operation.
+
 ### I2C1 — Peripheral Bus
 
 | Pin # | Port.Pin | Function | AF | Direction | Config | Connected To |
@@ -162,7 +176,7 @@ CFG_SEL0 = SCL line (idles high via pull-up). Combined: CFG_SEL[2:1:0] = 1,0,1 �
 |----|----------|
 | AF4 | I2C1, USART10, USART1 |
 | AF5 | SPI2 |
-| AF7 | USART2, USART3 |
+| AF7 | USART2, USART3, USART7 |
 | AF8 | UART4 |
 
 Refer to the STM32H735 datasheet Table 10 (Alternate Function mapping) for the complete list.
@@ -176,7 +190,7 @@ Refer to the STM32H735 datasheet Table 10 (Alternate Function mapping) for the c
 | GPIOC | SPI2_MISO (PC2), SPI2_MOSI (PC3), USB2517 RESET_N (PC13), UART4_TX (PC10), UART4_RX (PC11) |
 | GPIOD | Chip selects PD0-PD6 (DRV8702 x3, DAC80508, ADS7066 x3), VN5T016AH DAUGHTER_2 (PD14) |
 | GPIOE | ADC CNV (PE12), ADC BUSY (PE15), DRV8702 PH/EN (PE9/11/13/14), VN5T016AH (PE6/7/8/10) |
-| GPIOF | DRV8702 nSLEEP/MODE/nFAULT (PF0-2, PF12-14) |
+| GPIOF | USART7 RX/TX (PF6/7), RS485 DE/RE (PF8), DRV8702 nSLEEP/MODE/nFAULT (PF0-2, PF12-14) |
 | GPIOG | USART10 (PG11/12), USB2517 straps (PG0/1), DRV8702 nSLEEP/MODE/nFAULT (PG5-7), VN5T016AH FAN (PG2) |
 | GPIOJ | DRV8702 instance 3 PH/EN (PJ8/10), VN5T016AH TEC3_PWR (PJ11), ASSEMBLY_STATION (PJ9) |
 | GPIOK | VN5T016AH TEC1_PWR (PK2), TEC2_PWR (PK1) |

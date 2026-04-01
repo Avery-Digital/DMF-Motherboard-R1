@@ -29,6 +29,8 @@ When updating code, keep these in sync:
 - `docs/pin_assignments.md` — all MCU pin mappings
 - `docs/i2c_devices.md` — I2C bus device table
 - `docs/load_switches.md` — VN5T016AH load switch instances and API
+- `docs/thermistor.md` — NTC thermistor circuit, Steinhart-Hart conversion
+- `docs/rs485_gantry.md` — RS485 gantry driver, MAX485 wiring, protocol
 
 ## Datasheets
 

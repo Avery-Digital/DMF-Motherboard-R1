@@ -93,6 +93,8 @@ J-Link> g
 │   ├── Packet_Protocol.h       Frame parser and packet builder
 │   ├── Command.h               Command definitions and dispatch
 │   ├── USB2517.h               USB hub device driver
+│   ├── RS485_Driver.h          Half-duplex RS485 driver (USART7 + MAX485)
+│   ├── Thermistor.h            NTC thermistor ADC-to-temperature conversion
 │   └── ll_tick.h               SysTick millisecond counter
 ├── Src/
 │   ├── main.c                  Entry point, init sequence, main loop
@@ -110,6 +112,8 @@ J-Link> g
 │   ├── Packet_Protocol.c       Frame state machine and packet builder
 │   ├── Command.c               Command dispatch + handlers
 │   ├── USB2517.c               USB2517I GPIO strapping and reset control
+│   ├── RS485_Driver.c          Polled RS485 TX/RX with DE/RE toggling
+│   ├── Thermistor.c            Steinhart-Hart conversion (SC50G104WH)
 │   ├── ll_tick.c               LL_IncTick / LL_GetTick implementation
 │   └── stm32h7xx_it.c          ISR handlers (SysTick, DMA, USART, faults)
 ├── docs/
@@ -121,6 +125,8 @@ J-Link> g
 │   ├── dac80508.md             DAC80508 8-ch DAC driver details
 │   ├── ads7066.md              ADS7066 8-ch slow ADC driver details
 │   ├── load_switches.md        VN5T016AH load switch instances and API
+│   ├── thermistor.md           NTC thermistor circuit and Steinhart-Hart conversion
+│   ├── rs485_gantry.md         RS485 gantry driver, MAX485 wiring, protocol
 │   ├── clock_config.md         Clock tree details and PLL math
 │   ├── pin_assignments.md      MCU pin mapping (all peripherals)
 │   └── i2c_devices.md          I2C bus device table
@@ -139,6 +145,8 @@ The firmware uses a layered architecture with strict separation of concerns:
 | **Protocol** | `crc16`, `Packet_Protocol` | Transport-agnostic framing, CRC, and parsing. No hardware dependencies. |
 | **Devices** | `USB2517`, `DRV8702`, `VN5T016AH`, `DAC80508`, `ADS7066` | IC-specific drivers. USB2517 uses GPIO strapping (no I2C); DRV8702, DAC80508, and ADS7066 use shared SPI2; VN5T016AH uses GPIO only. |
 | **Daughtercard** | `DC_Uart_Driver` | Polled TX + DMA circular RX UART driver for 4 daughtercard interfaces (USART1, USART2, USART3, UART4). Routes driverboard commands by boardID. |
+| **RS485** | `RS485_Driver` | Polled half-duplex RS485 driver (USART7 + MAX485) for gantry communication. 9600 baud ASCII protocol. |
+| **Conversion** | `Thermistor` | NTC thermistor ADC-to-temperature conversion using Steinhart-Hart equation (SC50G104WH, Material Type G). |
 | **Application** | `Command`, `main` | Command dispatch, deferred task execution, and system orchestration. |
 
 See [docs/architecture.md](docs/architecture.md) for the full data flow diagram.
@@ -158,6 +166,7 @@ See [docs/architecture.md](docs/architecture.md) for the full data flow diagram.
 | 5c | `LoadSwitch_Init()` x10 | VN5T016AH high-side load switches (GPIO enable), all OFF on init, error code `0x60` on failure |
 | 6 | `USB2517_SetStrapPins()` | Assert RESET_N (PC13), drive CFG_SEL[2:1:0] = 1,0,1 for internal default mode, release reset. Hub attaches automatically — no SMBus config needed |
 | 6a | `LL_mDelay(100)` | Wait for USB2517 to exit POR and attach |
+| 6b | `RS485_Init()` | USART7 on PF6 (RX) / PF7 (TX), 9600 baud, DE/RE on PF8 (error code `0x70`) |
 | 7 | `Protocol_ParserInit()` | Register `OnPacketReceived` callback |
 | 7a | `USART_Driver_Init()` | USART10 on PG11 (RX) / PG12 (TX), 115200 baud, DMA streams |
 | 8 | `USART_Driver_StartRx()` | Enable circular DMA reception (HT/TC/IDLE interrupts) |
@@ -174,12 +183,13 @@ The main loop handles deferred tasks that are too heavy or unsafe for ISR contex
 while (1) {
     if (burst_request.pending)       →  Command_ExecuteBurstADC()         // 100x SPI reads
     if (dc_forward_request.pending)  →  Forward packet to DC UART        // Daughtercard async routing
+    if (gantry_request.pending)      →  Command_ExecuteGantry()          // RS485 polled TX/RX
     if (dc_list_request.pending)     →  Sequential SET/GET_LIST_OF_SW    // Synchronous bulk switch ops
     if (tx_request.pending)          →  USART_Driver_SendPacket()         // DMA TX
 }
 ```
 
-ISR-context command handlers populate `tx_request`, `burst_request`, `dc_forward_request`, or `dc_list_request` and set `.pending = true`. The main loop performs the actual work.
+ISR-context command handlers populate `tx_request`, `burst_request`, `dc_forward_request`, `dc_list_request`, or `gantry_request` and set `.pending = true`. The main loop performs the actual work.
 
 ## Communication Protocol
 
@@ -205,8 +215,10 @@ See [docs/packet_protocol.md](docs/packet_protocol.md) for the full specificatio
 | `CMD_READ_ADC` | `0x0C01` | (none) | 4 bytes: 18-bit ADC result, LE | ISR → deferred TX |
 | `CMD_BURST_ADC` | `0x0C02` | (none) | 400 bytes: 100 x 4-byte LE samples | ISR → deferred burst + TX |
 | `CMD_LOAD_*` | `0x0C10`–`0x0C19` | 1 byte: 0x01=ON, 0x00=OFF (or empty for query) | 1 byte: state (0x01/0x00) | ISR → deferred TX |
-| `CMD_THERM1`–`CMD_THERM6` | `0x0C20`–`0x0C25` | (none) | 2 bytes: 16-bit ADC result, LE | ISR → deferred TX |
-| Routed DC commands (26) | `0x0Axx`, `0x0Bxx`, `0xBEEF` | boardID + command-specific | Relayed from daughtercard | ISR → deferred forward/list |
+| `CMD_THERM1`–`CMD_THERM6` | `0x0C20`–`0x0C25` | (none) | 4 bytes: float temperature (°C) | ISR → deferred TX |
+| `CMD_GANTRY_CMD` | `0x0C30` | ASCII command string | ASCII response (or "TIMEOUT") | ISR → deferred RS485 TX/RX |
+| `CMD_GET_BOARD_TYPE` | `0x0B99` | (ignored) | 5 bytes: `00 00 FF 4D 42` ("MB") | ISR → deferred TX |
+| Routed DC commands (25) | `0x0Axx`, `0x0Bxx`, `0xBEEF` | boardID + command-specific | Relayed from daughtercard | ISR → deferred forward/list |
 
 See [docs/command_reference.md](docs/command_reference.md) for detailed payload layouts.
 
@@ -230,6 +242,7 @@ See [docs/command_reference.md](docs/command_reference.md) for detailed payload 
 | `0x51` | ADS7066 instance 2 init failure |
 | `0x52` | ADS7066 instance 3 init failure |
 | `0x60` | Load switch init failure |
+| `0x70` | RS485 / USART7 init failure |
 
 ## Adding a New Command
 

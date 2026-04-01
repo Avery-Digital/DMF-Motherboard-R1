@@ -224,7 +224,54 @@ Each `case` in `Command_Dispatch()` passes the appropriate `LoadSwitch_ID` enum 
 
 **Request payload:** None (length = 0).
 
-**Response payload:** 2 bytes, little-endian unsigned 16-bit ADC result.
+**Response payload:** 4 bytes, IEEE 754 little-endian float — temperature in degrees C.
+
+The firmware converts the raw ADC code to temperature using Steinhart-Hart coefficients for the SC50G104WH NTC thermistor (Material Type G, R25 = 100KΩ). The conversion accounts for the measurement circuit: 100 µA constant-current source driving R_th in parallel with a resistor divider (R1 = 10K, R2 = 1K), with the ADC reading across R2.
+
+Returns `NaN` (0x7FC00000) if the ADC read fails or the thermistor is absent/open.
+
+**Execution context:** ISR → deferred TX via `tx_request`.
+
+See [docs/thermistor.md](thermistor.md) for circuit details and conversion math.
+
+---
+
+## CMD_GANTRY_CMD — Gantry RS485 Passthrough (`0x0C30`)
+
+**Purpose:** Forward an ASCII command to the gantry system via RS485 (USART7 + MAX485) and return the response.
+
+**Request payload:** ASCII command string (e.g. `@01VER`), no null terminator. The firmware appends the null before sending over RS485.
+
+**Response payload:** ASCII response string from the gantry (e.g. `PR01 V1.0`), no null terminator. If the gantry does not respond within 500 ms, the response is `TIMEOUT` (7 bytes).
+
+**Execution context:** ISR → deferred to main loop via `gantry_request` → `Command_ExecuteGantry()` performs polled RS485 TX/RX → result via `tx_request`.
+
+**Constants:**
+
+```c
+#define GANTRY_RESPONSE_MAX  128U   /* Max ASCII response bytes */
+#define GANTRY_TIMEOUT_MS    500U   /* RS485 response timeout   */
+```
+
+See [docs/rs485_gantry.md](rs485_gantry.md) for hardware details and protocol.
+
+---
+
+## CMD_GET_BOARD_TYPE — Board Identification (`0x0B99`)
+
+**Purpose:** Returns a fixed identifier so the host can distinguish the motherboard from a driverboard. Uses the same command code as the driverboard's GET_BOARD_TYPE. The motherboard intercepts this command and responds directly — it is **not** forwarded to daughtercards.
+
+**Request payload:** Ignored.
+
+**Response payload:** 5 bytes:
+
+| Byte | Value | Meaning |
+|------|-------|---------|
+| 0 | `0x00` | status_1 |
+| 1 | `0x00` | status_2 (success) |
+| 2 | `0xFF` | boardID (0xFF = motherboard) |
+| 3 | `0x4D` | 'M' |
+| 4 | `0x42` | 'B' |
 
 **Execution context:** ISR → deferred TX via `tx_request`.
 
@@ -274,7 +321,6 @@ These 26 commands are forwarded asynchronously. The ISR defers to the main loop 
 | `0x0B01` | `GET_INA228_CH0` | Read INA228 ch0 |
 | `0x0B02` | `GET_INA228_CH1` | Read INA228 ch1 |
 | `0x0B53` | `GET_ALL_SW` | Get all 600 switch states |
-| `0x0B99` | `GET_BOARD_TYPE` | Board identification |
 
 **Request payload:** Byte 0 = boardID (0–3), remaining bytes = command-specific payload.
 
@@ -330,7 +376,8 @@ These 26 commands are forwarded asynchronously. The ISR defers to the main loop 
 | `0xDExx` | Debug / test commands |
 | `0x0Axx` | Driverboard switch/PMU/EHVG commands (routed to daughtercards) |
 | `0x0Bxx` | Driverboard bulk/query commands (routed to daughtercards) |
-| `0x0Cxx` | Motherboard-local: ADC reads (0x0C01–0x0C02), load switches (0x0C10–0x0C19), thermistors (0x0C20–0x0C25) |
+| `0x0B99` | Board identification (intercepted by motherboard, not forwarded) |
+| `0x0Cxx` | Motherboard-local: ADC (0x0C01–0x0C02), load switches (0x0C10–0x0C19), thermistors (0x0C20–0x0C25), gantry (0x0C30) |
 | `0x10xx` | (reserved — future control commands) |
 | `0xBExx` | Debug routed commands (0xBEEF) |
 | `0xFFxx` | (reserved — system/reset commands) |
