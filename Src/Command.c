@@ -151,11 +151,6 @@ void Command_Dispatch(USART_Handle *handle,
         Command_HandleGantry(handle, header, payload);
         break;
 
-    /* ---- Board Identity (0x0C99) ---- */
-    case CMD_GET_BOARD_TYPE:
-        Command_HandleGetBoardType(handle, header, payload);
-        break;
-
     /* ---- Driverboard Debug Command (0xBEEF) ---- */
     case CMD_DC_DEBUG:
         Command_HandleDcForward(header, payload);
@@ -167,6 +162,11 @@ void Command_Dispatch(USART_Handle *handle,
         break;
     case CMD_DC_GET_LIST_SW:
         Command_HandleDcGetList(header, payload);
+        break;
+
+    /* ---- Board Identity (0x0B99) — motherboard intercepts, does NOT forward ---- */
+    case CMD_GET_BOARD_TYPE:
+        Command_HandleGetBoardType(handle, header, payload);
         break;
 
     default:

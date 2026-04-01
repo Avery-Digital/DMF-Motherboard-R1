@@ -93,7 +93,7 @@ extern "C" {
  *    0xMB 0x01 = Motherboard Rev 1
  *  Compare: driverboard GET_BOARD_TYPE (0x0B99) returns 0xCA 0xCA
  */
-#define CMD_GET_BOARD_TYPE  CMD_CODE(0x0C, 0x99)    /**< Motherboard board ID    */
+#define CMD_GET_BOARD_TYPE  CMD_CODE(0x0B, 0x99)    /**< Board ID (same code as driverboard) */
 
 /* Motherboard identifier bytes */
 #define MB_BOARD_ID_1       0x4DU   /**< 'M' */

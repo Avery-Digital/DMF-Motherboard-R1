@@ -1229,7 +1229,7 @@ const RS485_Config rs485_cfg = {
         .mode       = LL_GPIO_MODE_OUTPUT,
         .af         = 0U,
         .speed      = LL_GPIO_SPEED_FREQ_VERY_HIGH,
-        .pull       = LL_GPIO_PULL_DOWN,        /* Default LOW = receive mode */
+        .pull       = LL_GPIO_PULL_UP,          /* Default HIGH → NOT gate → LOW = receive mode */
         .output     = LL_GPIO_OUTPUT_PUSHPULL,
     },
 };

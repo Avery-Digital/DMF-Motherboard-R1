@@ -11,16 +11,20 @@
 
 /* ---- Direction control --------------------------------------------------- */
 
+/* NOTE: PF8 goes through an inverter (NOT gate) before reaching the MAX485
+ *       RE+DE pins.  PF8 LOW → NOT gate → HIGH → DE=1 (transmit).
+ *       PF8 HIGH → NOT gate → LOW → RE=0 (receive).                        */
+
 void RS485_SetTx(RS485_Handle *handle)
 {
-    LL_GPIO_SetOutputPin(handle->cfg->de_re_pin.port,
-                         handle->cfg->de_re_pin.pin);
+    LL_GPIO_ResetOutputPin(handle->cfg->de_re_pin.port,
+                           handle->cfg->de_re_pin.pin);
 }
 
 void RS485_SetRx(RS485_Handle *handle)
 {
-    LL_GPIO_ResetOutputPin(handle->cfg->de_re_pin.port,
-                           handle->cfg->de_re_pin.pin);
+    LL_GPIO_SetOutputPin(handle->cfg->de_re_pin.port,
+                         handle->cfg->de_re_pin.pin);
 }
 
 /* ---- Polled byte helpers ------------------------------------------------- */
