@@ -870,7 +870,7 @@ const DMA_ChannelConfig act2_dma_rx_cfg = {
     .mem_inc           = LL_DMA_MEMORY_INCREMENT,
     .use_fifo          = false,
     .fifo_threshold    = 0U,
-    .irqn              = DMA1_STR7_IRQn,
+    .irqn              = DMA1_Stream7_IRQn,
     .irq_priority      = 4U,
 };
 
