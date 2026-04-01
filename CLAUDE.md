@@ -10,6 +10,7 @@ This is bare-metal STM32H735IGT6 firmware for the DMF Motherboard R1. LL drivers
 - **Never use HAL.** All peripheral access uses ST LL (Low-Layer) drivers.
 - **BSP separation.** All hardware config structs (pins, clocks, addresses) live in `Src/Bsp.c` / `Inc/Bsp.h`. Drivers reference them via handle pointers and contain no board-specific constants.
 - **TX deferral pattern.** ISR-context command handlers must NEVER call `USART_Driver_SendPacket()` directly. Populate `tx_request` and set `.pending = true`. The main loop performs the DMA transfer.
+- **Actuator board RS485 DE logic is inverted.** A NOT gate (LTC2864) sits between MCU and transceiver. GPIO LOW = transmit, GPIO HIGH = receive (idle). The `Act_Uart_Driver` handles this transparently.
 - **SPI2 bus sharing.** SPI2 is shared by 5 device types (LTC2338 32-bit Mode 0, DRV8702 16-bit Mode 0, DAC80508 24-bit Mode 1, ADS7066 24/16-bit Mode 0). Each driver reconfigures data width (and CPHA if needed) before its transfer and restores 32-bit Mode 0 afterward. Do not interleave SPI2 calls.
 - **DMA buffers in D2 SRAM.** STM32H7 DMA1/DMA2 cannot access DTCM. Buffers must use the `.dma_buffer` linker section (0x30000000), 32-byte aligned.
 - **Error codes.** `Error_Handler(fault_code)` writes to RTC backup DR0 and halts. See README.md for the fault code table.

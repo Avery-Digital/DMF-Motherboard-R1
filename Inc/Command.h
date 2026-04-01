@@ -117,6 +117,16 @@ extern "C" {
 #define CMD_DC_GET_LIST_SW  CMD_CODE(0x0B, 0x52)    /**< Bulk switch get (seq)   */
 #define CMD_DC_DEBUG        CMD_CODE(0xBE, 0xEF)    /**< Driverboard debug test  */
 
+/* ---- Actuator Board Command Routing ----
+ *
+ *  Commands in the 0x0F00–0x10FF range are actuator board commands.
+ *  The motherboard forwards these to ACT1 or ACT2 based on boardID
+ *  in payload[0]:  boardID 1 → ACT1 (UART5), boardID 2 → ACT2 (USART6).
+ */
+#define CMD_ACT_RANGE_START CMD_CODE(0x0F, 0x00)    /**< First actuator cmd      */
+#define CMD_ACT_RANGE_END   CMD_CODE(0x10, 0xFF)    /**< Last actuator cmd       */
+#define ACT_MAX_BOARDS      2U      /**< Number of actuator board slots          */
+
 /* Driverboard SET_LIST group size */
 #define DC_SET_GROUP_SIZE   5U      /**< [boardID][bank][SW_hi][SW_lo][state] */
 #define DC_GET_GROUP_SIZE   4U      /**< [boardID][bank][SW_hi][SW_lo]        */

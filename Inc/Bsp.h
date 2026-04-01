@@ -278,6 +278,41 @@ typedef struct {
     uint8_t                    dc_index;
 } DC_Uart_Handle;
 
+/* =================== Actuator Board UART Handle =========================== */
+
+/**
+ * @brief  Handle for actuator board UARTs (polled TX + DMA RX + RS485 DE).
+ *         Similar to DC_Uart_Handle but adds an inverted DE pin for
+ *         the LTC2864 RS485 transceiver (NOT gate between MCU and chip).
+ *
+ *         Inverted DE logic:
+ *           GPIO LOW  → NOT → DE=HIGH, RE=HIGH → Transmit
+ *           GPIO HIGH → NOT → DE=LOW,  RE=LOW  → Receive (idle)
+ */
+typedef struct {
+    const USART_Config        *cfg;
+    const DMA_ChannelConfig   *dma_rx;
+
+    /* RX DMA buffer — must be in D2 SRAM (.dma_buffer section) */
+    uint8_t                   *rx_buf;
+    uint16_t                   rx_buf_size;
+
+    /* Protocol parser — assigned at init, used by ISR */
+    void                      *parser;
+
+    /* RX tracking */
+    volatile uint16_t          rx_head;
+
+    /* true = APB2 (USART6), false = APB1 (UART5) */
+    bool                       is_apb2;
+
+    /* RS485 direction control — inverted (LOW = TX, HIGH = RX) */
+    PinConfig                  de_pin;
+
+    /* Instance ID (1 or 2) */
+    uint8_t                    act_index;
+} Act_Uart_Handle;
+
 /* ====================== RS485 Configuration ================================ */
 
 /**
@@ -512,6 +547,17 @@ extern DC_Uart_Handle           dc3_handle;
 extern const USART_Config       dc4_uart_cfg;       /* UART4, PC10 TX / PC11 RX */
 extern const DMA_ChannelConfig  dc4_dma_rx_cfg;     /* DMA1 Stream 5 */
 extern DC_Uart_Handle           dc4_handle;
+
+/* Actuator Board UARTs — polled TX + DMA circular RX + RS485 DE (inverted)
+ *   ACT1: UART5,   PB6 TX (AF14) / PB5 RX (AF14), DE=PC8 (inverted)
+ *   ACT2: USART6,  PC6 TX (AF7)  / PC7 RX (AF7),  DE=PG8 (inverted) */
+extern const USART_Config       act1_uart_cfg;
+extern const DMA_ChannelConfig  act1_dma_rx_cfg;    /* DMA1 Stream 6 */
+extern Act_Uart_Handle          act1_handle;
+
+extern const USART_Config       act2_uart_cfg;
+extern const DMA_ChannelConfig  act2_dma_rx_cfg;    /* DMA1 Stream 7 */
+extern Act_Uart_Handle          act2_handle;
 
 /* RS485 — USART7 + MAX485 for gantry communication
  *   TX  : PF7  (Pin 27, USART7_TX, AF7)

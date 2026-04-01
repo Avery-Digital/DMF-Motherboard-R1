@@ -61,6 +61,24 @@ typedef struct {
     uint8_t         board_id;       /**< 0–3 → dc1..dc4 handle              */
 } DcForwardRequest;
 
+/* =================== Actuator Board Forward Request ======================= */
+
+/**
+ * @brief  Deferred request to forward a packet to an actuator board UART.
+ *         ISR extracts boardID from payload[0]:
+ *           boardID 1 → ACT1 (UART5), boardID 2 → ACT2 (USART6).
+ *         Main loop sends via Act_Uart_SendPacket().
+ */
+typedef struct {
+    volatile bool   pending;
+    uint8_t         msg1, msg2, cmd1, cmd2;
+    uint8_t         payload[PKT_MAX_PAYLOAD];
+    uint16_t        length;
+    uint8_t         board_id;       /**< 1 or 2 → act1 or act2 handle       */
+} ActForwardRequest;
+
+extern ActForwardRequest act_forward_request;
+
 /**
  * @brief  Deferred request for SET_LIST_OF_SW / GET_LIST_OF_SW.
  *         These require synchronous per-group processing in the main loop.

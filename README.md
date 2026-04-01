@@ -2,7 +2,7 @@
 
 Bare-metal embedded firmware for the **DMF Motherboard Rev 1** built around the **STM32H735IGT6** microcontroller. The board interfaces with a host PC over USB (via USB2517I hub + FT231XQ USB-UART bridge) using a custom framed serial protocol with CRC-16 integrity checking.
 
-The system controls **3 TEC (thermoelectric cooler) H-bridges**, reads an **18-bit ADC** for temperature/voltage sensing, and **routes driverboard commands to up to 4 daughtercard boards** over dedicated UARTs, all commanded remotely by a host PC.
+The system controls **3 TEC (thermoelectric cooler) H-bridges**, reads an **18-bit ADC** for temperature/voltage sensing, **routes driverboard commands to up to 4 daughtercard boards** over dedicated UARTs, and **routes actuator board commands to up to 2 actuator boards** over RS485 (UART5/USART6 via LTC2864 transceivers), all commanded remotely by a host PC.
 
 ## Target Hardware
 
@@ -94,6 +94,7 @@ J-Link> g
 │   ├── Command.h               Command definitions and dispatch
 │   ├── USB2517.h               USB hub device driver
 │   ├── RS485_Driver.h          Half-duplex RS485 driver (USART7 + MAX485)
+│   ├── Act_Uart_Driver.h       Actuator board UART driver (UART5/USART6 + LTC2864 RS485)
 │   ├── Thermistor.h            NTC thermistor ADC-to-temperature conversion
 │   └── ll_tick.h               SysTick millisecond counter
 ├── Src/
@@ -113,6 +114,7 @@ J-Link> g
 │   ├── Command.c               Command dispatch + handlers
 │   ├── USB2517.c               USB2517I GPIO strapping and reset control
 │   ├── RS485_Driver.c          Polled RS485 TX/RX with DE/RE toggling
+│   ├── Act_Uart_Driver.c       Actuator board UART driver (2 instances, polled TX + DMA RX)
 │   ├── Thermistor.c            Steinhart-Hart conversion (SC50G104WH)
 │   ├── ll_tick.c               LL_IncTick / LL_GetTick implementation
 │   └── stm32h7xx_it.c          ISR handlers (SysTick, DMA, USART, faults)
@@ -146,6 +148,7 @@ The firmware uses a layered architecture with strict separation of concerns:
 | **Devices** | `USB2517`, `DRV8702`, `VN5T016AH`, `DAC80508`, `ADS7066` | IC-specific drivers. USB2517 uses GPIO strapping (no I2C); DRV8702, DAC80508, and ADS7066 use shared SPI2; VN5T016AH uses GPIO only. |
 | **Daughtercard** | `DC_Uart_Driver` | Polled TX + DMA circular RX UART driver for 4 daughtercard interfaces (USART1, USART2, USART3, UART4). Routes driverboard commands by boardID. |
 | **RS485** | `RS485_Driver` | Polled half-duplex RS485 driver (USART7 + MAX485) for gantry communication. 9600 baud ASCII protocol. |
+| **Actuator** | `Act_Uart_Driver` | Polled TX + DMA circular RX RS485 driver for 2 actuator board interfaces (UART5/USART6 via LTC2864). 115200 baud, inverted DE logic. Routes commands in 0x0F00-0x10FF range by boardID (1 or 2). |
 | **Conversion** | `Thermistor` | NTC thermistor ADC-to-temperature conversion using Steinhart-Hart equation (SC50G104WH, Material Type G). |
 | **Application** | `Command`, `main` | Command dispatch, deferred task execution, and system orchestration. |
 
@@ -173,6 +176,9 @@ See [docs/architecture.md](docs/architecture.md) for the full data flow diagram.
 | 9 | `Protocol_ParserInit()` x4 | Init dc1–dc4 parsers with `OnDC_PacketReceived` callback |
 | 9a | `DC_Uart_Init()` x4 | DC1 USART1, DC2 USART2, DC3 USART3, DC4 UART4 (error codes `0x12`–`0x15`) |
 | 9b | `DC_Uart_StartRx()` x4 | Enable DMA circular RX for all 4 daughtercard UARTs |
+| 10 | `Protocol_ParserInit()` x2 | Init act1/act2 parsers with `OnACT_PacketReceived` callback |
+| 10a | `Act_Uart_Init()` x2 | ACT1 UART5, ACT2 USART6 — RS485 via LTC2864 (error codes `0x16`–`0x17`) |
+| 10b | `Act_Uart_StartRx()` x2 | Enable DMA circular RX for both actuator board UARTs |
 | Boot test | — | Sends a `0xDEAD` packet with `{0xAA, 0xBB, 0xCC}` payload |
 
 ## Main Loop
@@ -183,13 +189,14 @@ The main loop handles deferred tasks that are too heavy or unsafe for ISR contex
 while (1) {
     if (burst_request.pending)       →  Command_ExecuteBurstADC()         // 100x SPI reads
     if (dc_forward_request.pending)  →  Forward packet to DC UART        // Daughtercard async routing
+    if (act_forward_request.pending) →  Forward packet to ACT UART       // Actuator board async routing
     if (gantry_request.pending)      →  Command_ExecuteGantry()          // RS485 polled TX/RX
     if (dc_list_request.pending)     →  Sequential SET/GET_LIST_OF_SW    // Synchronous bulk switch ops
     if (tx_request.pending)          →  USART_Driver_SendPacket()         // DMA TX
 }
 ```
 
-ISR-context command handlers populate `tx_request`, `burst_request`, `dc_forward_request`, `dc_list_request`, or `gantry_request` and set `.pending = true`. The main loop performs the actual work.
+ISR-context command handlers populate `tx_request`, `burst_request`, `dc_forward_request`, `act_forward_request`, `dc_list_request`, or `gantry_request` and set `.pending = true`. The main loop performs the actual work.
 
 ## Communication Protocol
 
@@ -219,6 +226,7 @@ See [docs/packet_protocol.md](docs/packet_protocol.md) for the full specificatio
 | `CMD_GANTRY_CMD` | `0x0C30` | ASCII command string | ASCII response (or "TIMEOUT") | ISR → deferred RS485 TX/RX |
 | `CMD_GET_BOARD_TYPE` | `0x0B99` | (ignored) | 5 bytes: `00 00 FF 4D 42` ("MB") | ISR → deferred TX |
 | Routed DC commands (25) | `0x0Axx`, `0x0Bxx`, `0xBEEF` | boardID + command-specific | Relayed from daughtercard | ISR → deferred forward/list |
+| Routed ACT commands | `0x0F00`–`0x10FF` | boardID (1-2) + command-specific | Relayed from actuator board | ISR → deferred ACT forward |
 
 See [docs/command_reference.md](docs/command_reference.md) for detailed payload layouts.
 
@@ -242,6 +250,8 @@ See [docs/command_reference.md](docs/command_reference.md) for detailed payload 
 | `0x51` | ADS7066 instance 2 init failure |
 | `0x52` | ADS7066 instance 3 init failure |
 | `0x60` | Load switch init failure |
+| `0x16` | ACT1 UART5 init failure |
+| `0x17` | ACT2 USART6 init failure |
 | `0x70` | RS485 / USART7 init failure |
 
 ## Adding a New Command

@@ -50,6 +50,16 @@
 │   │ DC_Uart_RxProcess│  (HT/TC/IDLE interrupts)    │
 │   │    ISR           │                              │
 │   └──────────────────┘                              │
+│                                                     │
+│   act_uart_driver.c                                 │
+│   ┌──────────────────┐                              │
+│   │ Act_Uart_Init    │  2 instances (UART5,         │
+│   │ Act_Uart_StartRx │   USART6) — polled TX,      │
+│   │ Act_Uart_Send    │   DMA circular RX,           │
+│   │   Bytes/Packet   │   RS485 DE (inverted via     │
+│   │ Act_Uart_RxProc  │   LTC2864 NOT gate)          │
+│   │    essISR        │                              │
+│   └──────────────────┘                              │
 ├─────────────────────────────────────────────────────┤
 │                      DEVICES                         │
 │                                                     │
@@ -106,6 +116,7 @@
 │   │  sys_clk_config  │   └──────────────────┘       │
 │   │  usart10_cfg/hdl │                              │
 │   │  dc1-4_cfg/hdl   │                              │
+│  act1-2_cfg/hdl  │                              │
 │   │  spi2_cfg/hdl    │   ll_tick.c                  │
 │   │  i2c1_cfg/hdl    │   ┌──────────────────┐       │
 │   │  drv8702_x_cfg   │   │ LL_IncTick       │       │
@@ -352,7 +363,57 @@ Same sequential pattern as Mode 2 but with 4-byte groups `[boardID][bank][SW_hi]
 | DMA1 Stream 4 | DC3 USART3 RX | RX | Circular |
 | DMA1 Stream 5 | DC4 UART4 RX | RX | Circular |
 
-DC UART TX is polled (no DMA needed).
+| DMA1 Stream 6 | ACT1 UART5 RX | RX | Circular |
+| DMA1 Stream 7 | ACT2 USART6 RX | RX | Circular |
+
+DC UART TX is polled (no DMA needed). ACT UART TX is also polled with RS485 DE toggling.
+
+## Data Flow — Actuator Board Command Routing
+
+The motherboard routes commands in the `0x0F00`-`0x10FF` range to one of 2 actuator board UARTs based on `boardID` (byte 0 of payload). Both interfaces use RS485 half-duplex via LTC2864 transceivers with inverted DE logic.
+
+### Async Forward (0x0F00-0x10FF)
+
+```
+GUI → USART10 RX → Command_Dispatch()
+    │ cmd in range 0x0F00–0x10FF
+    │ boardID = payload[0] (1 or 2)
+    │ ISR sets act_forward_request.pending
+    ▼
+Main loop
+    │ Selects ACT UART by boardID (1→UART5, 2→USART6)
+    │ Act_Uart_SendPacket() — polled TX with DE toggling
+    │   1. DE pin LOW (NOT gate → DE HIGH = transmit)
+    │   2. Polled byte-by-byte TX
+    │   3. Wait for TC (transmission complete)
+    │   4. DE pin HIGH (NOT gate → DE LOW = receive)
+    ▼
+Actuator board processes command
+    │ Response arrives via DMA circular RX
+    │ HT/TC/IDLE interrupt → Act_Uart_RxProcessISR()
+    │ → Protocol_FeedBytes() → OnACT_PacketReceived()
+    ▼
+tx_request.pending = true → USART10 TX → GUI
+```
+
+### BoardID → UART Mapping (Actuator Boards)
+
+| boardID | Handle | UART | TX / RX Pins | DE Pin | RS485 Transceiver |
+|---------|--------|------|-------------|--------|-------------------|
+| 1 | act1_handle | UART5 | PB6 TX / PB5 RX (AF14) | PC8 | LTC2864 (inverted DE) |
+| 2 | act2_handle | USART6 | PC6 TX / PC7 RX (AF7) | PG8 | LTC2864 (inverted DE) |
+
+### RS485 DE Logic (Inverted)
+
+A NOT gate sits between the MCU GPIO and the LTC2864 DE/RE pins:
+
+```
+MCU GPIO ──► NOT gate ──► LTC2864 DE + RE
+  LOW    →    HIGH    →  Transmit mode (DE=HIGH, RE=HIGH)
+  HIGH   →    LOW     →  Receive mode  (DE=LOW,  RE=LOW)
+```
+
+The idle state is GPIO HIGH (receive). The driver sets GPIO LOW before transmitting, then restores GPIO HIGH after the last byte's TC flag.
 
 ## Configuration vs. State Separation
 
@@ -416,6 +477,10 @@ static uint8_t usart10_rx_dma_buf[4096];
 | USART2 | — | `USART2_IRQHandler` | DC2 IDLE line detection |
 | USART3 | — | `USART3_IRQHandler` | DC3 IDLE line detection |
 | UART4 | — | `UART4_IRQHandler` | DC4 IDLE line detection |
+| DMA1_Stream6 | 4 | `DMA1_Stream6_IRQHandler` | ACT1 UART5 RX DMA HT/TC |
+| DMA1_Stream7 | 4 | `DMA1_Stream7_IRQHandler` | ACT2 USART6 RX DMA HT/TC |
+| UART5 | 5 | `UART5_IRQHandler` | ACT1 IDLE line detection |
+| USART6 | 5 | `USART6_IRQHandler` | ACT2 IDLE line detection |
 
 ## Adding a New Peripheral
 

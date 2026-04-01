@@ -24,6 +24,23 @@
 
 DMA assignments: DMA1 Stream 2 (DC1 RX), Stream 3 (DC2 RX), Stream 4 (DC3 RX), Stream 5 (DC4 RX). TX is polled.
 
+### Actuator Board UARTs — RS485 via LTC2864 (2 instances)
+
+| Pin # | Port.Pin | Function | AF | Direction | Config | Connected To |
+|-------|----------|----------|-----|-----------|--------|-------------|
+| — | PB6 | UART5_TX | AF14 | Output | Push-pull, Very High speed | LTC2864 DI (ACT1) |
+| — | PB5 | UART5_RX | AF14 | Input | Pull-up, Very High speed | LTC2864 RO (ACT1) |
+| — | PC8 | ACT1 DE GPIO | — | Output | Push-pull, Pull-up, Very High speed | NOT gate → LTC2864 DE+RE (ACT1) |
+| — | PC6 | USART6_TX | AF7 | Output | Push-pull, Very High speed | LTC2864 DI (ACT2) |
+| — | PC7 | USART6_RX | AF7 | Input | Pull-up, Very High speed | LTC2864 RO (ACT2) |
+| — | PG8 | ACT2 DE GPIO | — | Output | Push-pull, Pull-up, Very High speed | NOT gate → LTC2864 DE+RE (ACT2) |
+
+DMA assignments: DMA1 Stream 6 (ACT1 RX), Stream 7 (ACT2 RX). TX is polled with RS485 DE toggling.
+
+**RS485 DE Logic (Inverted):** A NOT gate sits between each MCU GPIO and the LTC2864 transceiver. GPIO LOW = transmit (DE HIGH), GPIO HIGH = receive/idle (DE LOW). The driver in `Act_Uart_Driver.c` handles this inversion transparently.
+
+**Baud rate:** 115200, 8N1. Kernel clock: PLL2Q (128 MHz). ACT1 (UART5) is on APB1, ACT2 (USART6) is on APB2.
+
 ### USART7 — RS485 Gantry Communication (via MAX485 uMAX)
 
 | Pin # | Port.Pin | Function | AF | Direction | Config | Connected To |
@@ -176,8 +193,9 @@ CFG_SEL0 = SCL line (idles high via pull-up). Combined: CFG_SEL[2:1:0] = 1,0,1 �
 |----|----------|
 | AF4 | I2C1, USART10, USART1 |
 | AF5 | SPI2 |
-| AF7 | USART2, USART3, USART7 |
+| AF7 | USART2, USART3, USART6, USART7 |
 | AF8 | UART4 |
+| AF14 | UART5 |
 
 Refer to the STM32H735 datasheet Table 10 (Alternate Function mapping) for the complete list.
 
@@ -186,11 +204,11 @@ Refer to the STM32H735 datasheet Table 10 (Alternate Function mapping) for the c
 | Port | Peripherals Using It |
 |------|---------------------|
 | GPIOA | SPI2_SCK (PA9), USART2_TX (PA2), USART2_RX (PA3) |
-| GPIOB | I2C1_SDA (PB7), I2C1_SCL (PB8), USART1_TX (PB14), USART1_RX (PB15), USART3_TX (PB10), USART3_RX (PB11) |
-| GPIOC | SPI2_MISO (PC2), SPI2_MOSI (PC3), USB2517 RESET_N (PC13), UART4_TX (PC10), UART4_RX (PC11) |
+| GPIOB | I2C1_SDA (PB7), I2C1_SCL (PB8), UART5_RX (PB5), UART5_TX (PB6), USART1_TX (PB14), USART1_RX (PB15), USART3_TX (PB10), USART3_RX (PB11) |
+| GPIOC | SPI2_MISO (PC2), SPI2_MOSI (PC3), USART6_TX (PC6), USART6_RX (PC7), ACT1 DE (PC8), UART4_TX (PC10), UART4_RX (PC11), USB2517 RESET_N (PC13) |
 | GPIOD | Chip selects PD0-PD6 (DRV8702 x3, DAC80508, ADS7066 x3), VN5T016AH DAUGHTER_2 (PD14) |
 | GPIOE | ADC CNV (PE12), ADC BUSY (PE15), DRV8702 PH/EN (PE9/11/13/14), VN5T016AH (PE6/7/8/10) |
 | GPIOF | USART7 RX/TX (PF6/7), RS485 DE/RE (PF8), DRV8702 nSLEEP/MODE/nFAULT (PF0-2, PF12-14) |
-| GPIOG | USART10 (PG11/12), USB2517 straps (PG0/1), DRV8702 nSLEEP/MODE/nFAULT (PG5-7), VN5T016AH FAN (PG2) |
+| GPIOG | USART10 (PG11/12), USB2517 straps (PG0/1), DRV8702 nSLEEP/MODE/nFAULT (PG5-7), ACT2 DE (PG8), VN5T016AH FAN (PG2) |
 | GPIOJ | DRV8702 instance 3 PH/EN (PJ8/10), VN5T016AH TEC3_PWR (PJ11), ASSEMBLY_STATION (PJ9) |
 | GPIOK | VN5T016AH TEC1_PWR (PK2), TEC2_PWR (PK1) |

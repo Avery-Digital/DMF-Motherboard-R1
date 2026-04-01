@@ -67,6 +67,9 @@ static void Command_HandleGantry(USART_Handle *handle,
                                   const PacketHeader *header,
                                   const uint8_t *payload);
 
+static void Command_HandleActForward(const PacketHeader *header,
+                                      const uint8_t *payload);
+
 /* ==========================================================================
  *  COMMAND DISPATCH
  *
@@ -173,6 +176,10 @@ void Command_Dispatch(USART_Handle *handle,
         /* Check if command falls in driverboard range (0x0A00–0x0BFF) */
         if (cmd >= CMD_DC_RANGE_START && cmd <= CMD_DC_RANGE_END) {
             Command_HandleDcForward(header, payload);
+        }
+        /* Check if command falls in actuator board range (0x0F00–0x10FF) */
+        else if (cmd >= CMD_ACT_RANGE_START && cmd <= CMD_ACT_RANGE_END) {
+            Command_HandleActForward(header, payload);
         }
         /* Unknown command — ignore */
         break;
@@ -594,4 +601,32 @@ void Command_ExecuteGantry(void)
     memcpy(tx_request.payload, response, len);
     tx_request.length = len;
     tx_request.pending = true;
+}
+
+/* ==========================================================================
+ *  ACTUATOR BOARD FORWARD (0x0F00–0x10FF) — ISR context, deferred
+ *
+ *  Extracts boardID from payload[0]:
+ *    boardID 1 → ACT1 (UART5)
+ *    boardID 2 → ACT2 (USART6)
+ *
+ *  The entire packet (including boardID) is forwarded to the actuator board.
+ *  The response comes back via the actuator board's parser callback.
+ * ========================================================================== */
+static void Command_HandleActForward(const PacketHeader *header,
+                                      const uint8_t *payload)
+{
+    if (header->length == 0U || payload == NULL) return;
+
+    uint8_t board_id = payload[0];
+    if (board_id < 1U || board_id > ACT_MAX_BOARDS) return;
+
+    act_forward_request.msg1     = header->msg1;
+    act_forward_request.msg2     = header->msg2;
+    act_forward_request.cmd1     = header->cmd1;
+    act_forward_request.cmd2     = header->cmd2;
+    act_forward_request.board_id = board_id;
+    memcpy(act_forward_request.payload, payload, header->length);
+    act_forward_request.length   = header->length;
+    act_forward_request.pending  = true;  /* Must be last */
 }

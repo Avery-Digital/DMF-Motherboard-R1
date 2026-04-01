@@ -369,6 +369,43 @@ These 26 commands are forwarded asynchronously. The ISR defers to the main loop 
 
 ---
 
+---
+
+## Actuator Board Routed Commands (0x0F00–0x10FF)
+
+The motherboard does not execute these commands locally. Instead, it routes any command with a code in the `0x0F00`–`0x10FF` range to one of 2 actuator board UARTs based on `boardID` (payload byte 0). The response from the actuator board is relayed back to the GUI over USART10.
+
+This uses RS485 half-duplex communication via LTC2864 transceivers (UART5 for ACT1, USART6 for ACT2) at 115200 baud, 8N1.
+
+### BoardID Mapping (Actuator Boards)
+
+| boardID | UART | RS485 Transceiver | DE Pin |
+|---------|------|--------------------|--------|
+| 1 | UART5 | LTC2864 (ACT1) | PC8 (inverted) |
+| 2 | USART6 | LTC2864 (ACT2) | PG8 (inverted) |
+
+### Request Payload
+
+Byte 0 = boardID (1 or 2), remaining bytes = actuator-board-specific payload.
+
+### Response Payload
+
+Relayed from the actuator board without modification via the `OnACT_PacketReceived` callback.
+
+### Execution Context
+
+ISR detects command code in range `CMD_ACT_RANGE_START` (`0x0F00`) to `CMD_ACT_RANGE_END` (`0x10FF`) and defers to the main loop via `act_forward_request`. The main loop calls `Act_Uart_SendPacket()` which performs polled RS485 TX with DE toggling, then the response arrives via DMA circular RX and is relayed to the GUI.
+
+### Constants
+
+```c
+#define CMD_ACT_RANGE_START CMD_CODE(0x0F, 0x00)  /* 0x0F00 */
+#define CMD_ACT_RANGE_END   CMD_CODE(0x10, 0xFF)  /* 0x10FF */
+#define ACT_MAX_BOARDS      2U
+```
+
+---
+
 ## Command Code Allocation
 
 | Range | Category |
@@ -378,6 +415,6 @@ These 26 commands are forwarded asynchronously. The ISR defers to the main loop 
 | `0x0Bxx` | Driverboard bulk/query commands (routed to daughtercards) |
 | `0x0B99` | Board identification (intercepted by motherboard, not forwarded) |
 | `0x0Cxx` | Motherboard-local: ADC (0x0C01–0x0C02), load switches (0x0C10–0x0C19), thermistors (0x0C20–0x0C25), gantry (0x0C30) |
-| `0x10xx` | (reserved — future control commands) |
+| `0x0Fxx`–`0x10xx` | Actuator board commands (routed to ACT1/ACT2 via RS485) |
 | `0xBExx` | Debug routed commands (0xBEEF) |
 | `0xFFxx` | (reserved — system/reset commands) |

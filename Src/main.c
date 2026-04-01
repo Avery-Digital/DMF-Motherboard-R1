@@ -39,6 +39,7 @@
 #include "ADS7066.h"
 #include "VN5T016AH.h"
 #include "DC_Uart_Driver.h"
+#include "Act_Uart_Driver.h"
 #include "RS485_Driver.h"
 #include <string.h>
 #include "stm32h7xx_ll_rtc.h"
@@ -51,6 +52,8 @@ static ProtocolParser dc1_parser;
 static ProtocolParser dc2_parser;
 static ProtocolParser dc3_parser;
 static ProtocolParser dc4_parser;
+static ProtocolParser act1_parser;
+static ProtocolParser act2_parser;
 
 /* Deferred TX request — set by ISR, consumed by main loop */
 TxRequest    tx_request    = {0};
@@ -66,6 +69,9 @@ DcListRequest    dc_list_request    = {0};
 
 /* Gantry RS485 request — deferred to main loop */
 GantryRequest    gantry_request     = {0};
+
+/* Actuator board forward request — async, single command */
+ActForwardRequest act_forward_request = {0};
 
 /* Response mailbox for synchronous DC operations */
 DcResponse       dc_response        = {0};
@@ -93,11 +99,31 @@ static DC_Uart_Handle* DC_GetHandle(uint8_t board_id)
     return dc_handles[board_id];
 }
 
+/* ======================== ACT Handle Lookup ================================ */
+
+/**
+ * @brief  Map boardID (1–2) to the corresponding Act_Uart_Handle.
+ * @return Pointer to handle, or NULL if boardID is out of range.
+ */
+static Act_Uart_Handle* ACT_GetHandle(uint8_t board_id)
+{
+    static Act_Uart_Handle* const act_handles[ACT_MAX_BOARDS] = {
+        &act1_handle,   /* boardID 1 → UART5  */
+        &act2_handle,   /* boardID 2 → USART6 */
+    };
+
+    if (board_id < 1U || board_id > ACT_MAX_BOARDS) return NULL;
+    return act_handles[board_id - 1U];
+}
+
 /* Private function prototypes -----------------------------------------------*/
 static void SystemInit_Sequence(void);
 static void OnPacketReceived(const PacketHeader *header,
                              const uint8_t *payload,
                              void *ctx);
+static void OnACT_PacketReceived(const PacketHeader *header,
+                                 const uint8_t *payload,
+                                 void *ctx);
 static void OnDC_PacketReceived(const PacketHeader *header,
                                  const uint8_t *payload,
                                  void *ctx);
@@ -132,6 +158,21 @@ int main(void)
                                        dc_forward_request.cmd2,
                                        dc_forward_request.payload,
                                        dc_forward_request.length);
+                }
+            }
+
+            /* Forward an actuator board command (async) */
+            if (act_forward_request.pending) {
+                act_forward_request.pending = false;
+                Act_Uart_Handle *act = ACT_GetHandle(act_forward_request.board_id);
+                if (act != NULL) {
+                    Act_Uart_SendPacket(act,
+                                        act_forward_request.msg1,
+                                        act_forward_request.msg2,
+                                        act_forward_request.cmd1,
+                                        act_forward_request.cmd2,
+                                        act_forward_request.payload,
+                                        act_forward_request.length);
                 }
             }
 
@@ -312,6 +353,19 @@ static void SystemInit_Sequence(void)
         Error_Handler(0x15);
     }
     DC_Uart_StartRx(&dc4_handle);
+
+    /* Step 11: Actuator board UARTs — polled TX + DMA circular RX + RS485 DE */
+    Protocol_ParserInit(&act1_parser, OnACT_PacketReceived, &act1_handle);
+    if (Act_Uart_Init(&act1_handle, &act1_parser) != INIT_OK) {
+        Error_Handler(0x16);
+    }
+    Act_Uart_StartRx(&act1_handle);
+
+    Protocol_ParserInit(&act2_parser, OnACT_PacketReceived, &act2_handle);
+    if (Act_Uart_Init(&act2_handle, &act2_parser) != INIT_OK) {
+        Error_Handler(0x17);
+    }
+    Act_Uart_StartRx(&act2_handle);
 }
 
 /* ==========================================================================
@@ -332,6 +386,33 @@ static void OnPacketReceived(const PacketHeader *header,
 
     /* Route to command handler based on cmd1 + cmd2 */
     Command_Dispatch(&usart10_handle, header, payload);
+}
+
+/* ==========================================================================
+ *  ACTUATOR BOARD PACKET RECEIVED CALLBACK
+ *
+ *  Called when an actuator board sends a response packet.
+ *  Relay the response back to the GUI via USART10.
+ *  Runs in ISR context — keep it fast.
+ * ========================================================================== */
+static void OnACT_PacketReceived(const PacketHeader *header,
+                                 const uint8_t *payload,
+                                 void *ctx)
+{
+    (void)ctx;
+
+    /* Relay actuator board response to the GUI via USART10 */
+    if (!tx_request.pending) {
+        tx_request.msg1 = header->msg1;
+        tx_request.msg2 = header->msg2;
+        tx_request.cmd1 = header->cmd1;
+        tx_request.cmd2 = header->cmd2;
+        if (header->length > 0U && header->length <= PKT_MAX_PAYLOAD) {
+            memcpy(tx_request.payload, payload, header->length);
+        }
+        tx_request.length  = header->length;
+        tx_request.pending = true;
+    }
 }
 
 /* ==========================================================================
