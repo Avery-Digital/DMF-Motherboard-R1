@@ -406,6 +406,166 @@ ISR detects command code in range `CMD_ACT_RANGE_START` (`0x0F00`) to `CMD_ACT_R
 
 ---
 
+## Detailed Packet Examples (Byte-Level)
+
+For software engineers integrating with the motherboard, here is the exact byte structure for every motherboard-local command. All values are hex. Byte stuffing omitted for clarity.
+
+**Notation:** `→` = request to motherboard, `←` = response from motherboard. `[m1][m2]` = message IDs (echoed). CRC is over header+payload.
+
+---
+
+### CMD_PING (0xDEAD)
+
+```
+→ [02] [m1] [m2] [00] [00] [DE] [AD] [CRC_hi] [CRC_lo] [7E]
+                  len=0    cmd=DEAD
+
+← [02] [m1] [m2] [00] [08] [DE] [AD] [DE AD BE EF 01 02 03 04] [CRC] [7E]
+                  len=8    cmd=DEAD   fixed test payload
+```
+
+---
+
+### CMD_READ_ADC (0x0C01)
+
+```
+→ [02] [m1] [m2] [00] [00] [0C] [01] [CRC] [7E]
+                  len=0
+
+← [02] [m1] [m2] [00] [04] [0C] [01] [b0] [b1] [b2] [b3] [CRC] [7E]
+                  len=4               32-bit LE, 18-bit ADC result
+                                      (0xFFFFFFFF = read error)
+```
+
+---
+
+### CMD_BURST_ADC (0x0C02)
+
+```
+→ [02] [m1] [m2] [00] [00] [0C] [02] [CRC] [7E]
+
+← [02] [m1] [m2] [01] [90] [0C] [02] [400 bytes: 100 x 4-byte LE samples] [CRC] [7E]
+                  len=400             each sample: 32-bit LE, 18-bit ADC result
+                                      (0xFFFFFFFF per failed sample)
+```
+
+---
+
+### CMD_LOAD_* (0x0C10-0x0C19) — Set
+
+```
+→ [02] [m1] [m2] [00] [01] [0C] [1x] [state] [CRC] [7E]
+                  len=1              x=switch ID    0x01=ON, 0x00=OFF
+
+← [02] [m1] [m2] [00] [01] [0C] [1x] [actual] [CRC] [7E]
+                  len=1              echoed cmd     actual state after command
+```
+
+### CMD_LOAD_* (0x0C10-0x0C19) — Query (empty payload)
+
+```
+→ [02] [m1] [m2] [00] [00] [0C] [1x] [CRC] [7E]
+                  len=0
+
+← [02] [m1] [m2] [00] [01] [0C] [1x] [state] [CRC] [7E]
+                  len=1              current state (0x01=ON, 0x00=OFF)
+```
+
+Load switch IDs: x=0 Valve1, x=1 Valve2, x=2 Microplate, x=3 Fan, x=4 TEC1, x=5 TEC2, x=6 TEC3, x=7 Assembly, x=8 Daughter1, x=9 Daughter2.
+
+---
+
+### CMD_THERM1-6 (0x0C20-0x0C25)
+
+```
+→ [02] [m1] [m2] [00] [00] [0C] [2x] [CRC] [7E]
+                  len=0              x=0 therm1 ... x=5 therm6
+
+← [02] [m1] [m2] [00] [04] [0C] [2x] [f0] [f1] [f2] [f3] [CRC] [7E]
+                  len=4              IEEE 754 float, LE, temperature in °C
+                                     NaN (0x0000C07F LE) = read error or absent
+```
+
+Conversion: `memcpy(&float_val, &payload[0], 4)` on little-endian systems.
+
+---
+
+### CMD_GANTRY_CMD (0x0C30)
+
+```
+→ [02] [m1] [m2] [00] [06] [0C] [30] [40 30 31 56 45 52] [CRC] [7E]
+                  len=6              "@01VER" as ASCII bytes (no null)
+
+← [02] [m1] [m2] [00] [nn] [0C] [30] [ASCII response bytes...] [CRC] [7E]
+                  len=nn             gantry response (no null)
+                                     or "TIMEOUT" (7 bytes) on 500ms timeout
+```
+
+---
+
+### CMD_GET_BOARD_TYPE (0x0B99) — Intercepted by Motherboard
+
+```
+→ [02] [m1] [m2] [00] [00] [0B] [99] [CRC] [7E]
+                  len=0    (payload ignored)
+
+← [02] [m1] [m2] [00] [05] [0B] [99] [00] [00] [FF] [4D] [42] [CRC] [7E]
+                  len=5               s1   s2   bid   'M'  'B'
+                                      0xFF = motherboard boardID
+```
+
+This command is NOT forwarded to driverboards even though 0x0B99 is in the DC range. The motherboard intercepts it in an explicit `case` before the default driverboard routing.
+
+---
+
+### Driverboard Routed Commands (0x0A00-0x0BFF)
+
+These are **not processed** by the motherboard. The payload is forwarded to the target driverboard UART and the response is relayed back unchanged.
+
+```
+GUI → Motherboard:
+  [02] [m1] [m2] [len_hi] [len_lo] [cmd1] [cmd2] [boardID] [data...] [CRC] [7E]
+                                                    ↑ byte 0 of payload = boardID (0-3)
+
+Motherboard → Driverboard:
+  [02] [m1] [m2] [len_hi] [len_lo] [cmd1] [cmd2] [boardID] [data...] [CRC] [7E]
+                                                    (same packet, re-framed)
+
+Driverboard → Motherboard → GUI:
+  [02] [m1] [m2] [len_hi] [len_lo] [cmd1] [cmd2] [response...] [CRC] [7E]
+                                                    (relayed unchanged)
+```
+
+The msg1/msg2 and cmd1/cmd2 fields are preserved end-to-end so the GUI can match responses to requests.
+
+---
+
+### Actuator Board Routed Commands (0x0F00-0x10FF)
+
+Same forwarding pattern as driverboard commands, but via RS485:
+
+```
+GUI → Motherboard:
+  [02] [m1] [m2] [len_hi] [len_lo] [cmd1] [cmd2] [boardID] [data...] [CRC] [7E]
+                                                    ↑ boardID = 1 or 2
+
+Motherboard → Actuator Board (RS485):
+  [02] [m1] [m2] [len_hi] [len_lo] [cmd1] [cmd2] [boardID] [data...] [CRC] [7E]
+
+Actuator Board → Motherboard → GUI (RS485 → USART10):
+  [02] [m1] [m2] [len_hi] [len_lo] [cmd1] [cmd2] [s1] [s2] [boardID] [data...] [CRC] [7E]
+```
+
+See the [DMF-ActuatorBoard README](https://github.com/Avery-Digital/DMF-ActuatorBoard) for detailed per-command actuator payloads.
+
+---
+
+### Response Flow Documentation
+
+For a detailed trace of how commands and responses flow through every layer (ISR, DMA, main loop, RS485 direction control), see [response_flow.md](response_flow.md).
+
+---
+
 ## Command Code Allocation
 
 | Range | Category |
