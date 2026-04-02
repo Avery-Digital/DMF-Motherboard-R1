@@ -137,6 +137,26 @@ Seven chip-select lines on GPIOD (PD0–PD6) are configured by each device drive
 
 The LTC2338-18 does not use a chip select — it is always selected and controlled via the CNV/BUSY handshake.
 
+## Known Signal Characteristics
+
+The LTC2338-18 ADC input carries two superimposed signals:
+
+- **Signal of interest:** ~10 kHz waveform (the droplet sensing signal)
+- **Mains-coupled noise:** ~58 Hz sinusoid, approximately ±1 V amplitude (60 Hz mains hum)
+
+Because the 100-sample burst window (~300 µs) is much shorter than one 58 Hz cycle (~17 ms), each burst captures the 10 kHz signal riding on a quasi-DC offset determined by the instantaneous phase of the 58 Hz noise. This causes the apparent DC level to shift between bursts (e.g., +2 V to −2 V one burst, +3 V to −1 V the next).
+
+**Suspected sources (to be confirmed with bench supply test):**
+1. **Conducted ripple:** Mains ripple passing through the off-the-shelf wall wart power supply onto the board's power rails.
+2. **Radiated EMI pickup:** ADC input traces or wiring acting as antennas, picking up 60 Hz from nearby mains wiring, lights, or equipment via capacitive/inductive coupling.
+
+Testing with a regulated bench supply (e.g., BK Precision) will help differentiate: if noise disappears, the wall wart is the source (conducted). If noise persists, it is radiated pickup from the environment — which can be further confirmed by observing amplitude changes when repositioning the board relative to mains sources.
+
+**Mitigation options:**
+- **Mean subtraction (GUI/firmware):** Subtract the burst mean to re-center each capture around 0 V. Simple and effective for visualization.
+- **Hardware filtering:** Add a high-pass filter or improve analog ground routing to attenuate the 58 Hz coupling at the source.
+- **Digital notch filter:** Apply a 58–60 Hz notch filter in firmware or GUI for quantitative measurements.
+
 ## API Reference
 
 ### `SPI_Init(SPI_Handle *handle)`
