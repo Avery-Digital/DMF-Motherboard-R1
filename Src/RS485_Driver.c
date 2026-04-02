@@ -139,8 +139,8 @@ uint16_t RS485_SendCommand(RS485_Handle *handle,
         }
     }
 
-    /* Send null terminator */
-    if (!TxByte(usart, 0x00U, timeout_ms)) {
+    /* Send carriage return (gantry protocol terminator) */
+    if (!TxByte(usart, 0x0DU, timeout_ms)) {
         RS485_SetRx(handle);
         return 0U;
     }
@@ -165,9 +165,10 @@ uint16_t RS485_SendCommand(RS485_Handle *handle,
         if (LL_USART_IsActiveFlag_RXNE_RXFNE(usart)) {
             uint8_t byte = LL_USART_ReceiveData8(usart);
 
-            if (byte == 0x00U) {
-                /* Null terminator — response complete */
-                break;
+            if (byte == 0x0DU || byte == 0x0AU) {
+                /* CR or LF — response complete */
+                if (count > 0U) break;  /* ignore leading CR/LF */
+                continue;
             }
 
             response[count++] = (char)byte;
