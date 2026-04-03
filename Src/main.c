@@ -102,18 +102,18 @@ static DC_Uart_Handle* DC_GetHandle(uint8_t board_id)
 /* ======================== ACT Handle Lookup ================================ */
 
 /**
- * @brief  Map boardID (1–2) to the corresponding Act_Uart_Handle.
+ * @brief  Map boardID (0–1) to the corresponding Act_Uart_Handle.
  * @return Pointer to handle, or NULL if boardID is out of range.
  */
 static Act_Uart_Handle* ACT_GetHandle(uint8_t board_id)
 {
     static Act_Uart_Handle* const act_handles[ACT_MAX_BOARDS] = {
-        &act1_handle,   /* boardID 1 → UART5  */
-        &act2_handle,   /* boardID 2 → USART6 */
+        &act1_handle,   /* boardID 0 → UART5  */
+        &act2_handle,   /* boardID 1 → USART6 */
     };
 
-    if (board_id < 1U || board_id > ACT_MAX_BOARDS) return NULL;
-    return act_handles[board_id - 1U];
+    if (board_id >= ACT_MAX_BOARDS) return NULL;
+    return act_handles[board_id];
 }
 
 /* Private function prototypes -----------------------------------------------*/

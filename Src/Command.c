@@ -204,18 +204,26 @@ static void Command_HandlePing(USART_Handle *handle,
     (void)handle;
     (void)payload;
 
-    static const uint8_t test_payload[] = {
-        0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03, 0x04
-    };
+    /* Response: [status1][status2]["MB_R1 v1.0.0"] */
+    uint8_t response[2 + 12];
+    response[0] = STATUS_CAT_OK;
+    response[1] = STATUS_CODE_OK;
+    response[2]  = 'M';  response[3]  = 'B';  response[4]  = '_';
+    response[5]  = 'R';  response[6]  = '1';  response[7]  = ' ';
+    response[8]  = 'v';
+    response[9]  = '0' + FW_VERSION_MAJOR;
+    response[10] = '.';
+    response[11] = '0' + FW_VERSION_MINOR;
+    response[12] = '.';
+    response[13] = '0' + FW_VERSION_PATCH;
 
-    /* Never call SendPacket from ISR — set flag for main loop */
     tx_request.msg1    = header->msg1;
     tx_request.msg2    = header->msg2;
     tx_request.cmd1    = header->cmd1;
     tx_request.cmd2    = header->cmd2;
-    memcpy(tx_request.payload, test_payload, sizeof(test_payload));
-    tx_request.length  = sizeof(test_payload);
-    tx_request.pending = true;  /* Must be last — acts as the commit */
+    memcpy(tx_request.payload, response, sizeof(response));
+    tx_request.length  = sizeof(response);
+    tx_request.pending = true;
 }
 
 /* ==========================================================================
@@ -247,32 +255,34 @@ static void Command_HandleReadADC(USART_Handle *handle,
     (void)payload;
 
     uint32_t adc_result = 0U;
-    uint8_t  response[4];
+    uint8_t  response[6];  /* [status1][status2][4-byte ADC LE] */
+
+    response[0] = STATUS_CAT_OK;
+    response[1] = STATUS_CODE_OK;
 
     SPI_Status status = SPI_LTC2338_Read(&spi2_handle, &adc_result);
 
     if (status == SPI_OK) {
-        /* Pack 18-bit result as 4-byte little-endian */
-        response[0] = (uint8_t)( adc_result        & 0xFFU);
-        response[1] = (uint8_t)((adc_result >>  8U) & 0xFFU);
-        response[2] = (uint8_t)((adc_result >> 16U) & 0x03U);  /* Only bits [17:16] valid */
-        response[3] = 0x00U;
+        response[2] = (uint8_t)( adc_result        & 0xFFU);
+        response[3] = (uint8_t)((adc_result >>  8U) & 0xFFU);
+        response[4] = (uint8_t)((adc_result >> 16U) & 0x03U);
+        response[5] = 0x00U;
     } else {
-        /* Sentinel — all 0xFF signals a failed read to the host */
-        response[0] = 0xFFU;
-        response[1] = 0xFFU;
+        response[0] = STATUS_CAT_ADC;
+        response[1] = STATUS_ADC_SPI_FAIL;
         response[2] = 0xFFU;
         response[3] = 0xFFU;
+        response[4] = 0xFFU;
+        response[5] = 0xFFU;
     }
 
-    /* Never call SendPacket from ISR — set flag for main loop */
     tx_request.msg1    = header->msg1;
     tx_request.msg2    = header->msg2;
     tx_request.cmd1    = header->cmd1;
     tx_request.cmd2    = header->cmd2;
     memcpy(tx_request.payload, response, sizeof(response));
     tx_request.length  = sizeof(response);
-    tx_request.pending = true;  /* Must be last — acts as the commit */
+    tx_request.pending = true;
 }
 
 /* ==========================================================================
@@ -344,9 +354,11 @@ void Command_ExecuteBurstADC(void)
     tx_request.msg2    = burst_request.msg2;
     tx_request.cmd1    = burst_request.cmd1;
     tx_request.cmd2    = burst_request.cmd2;
-    memcpy(tx_request.payload, burst_payload, ADC_BURST_PAYLOAD_SIZE);
-    tx_request.length  = ADC_BURST_PAYLOAD_SIZE;
-    tx_request.pending = true;  /* Must be last — acts as the commit */
+    tx_request.payload[0] = STATUS_CAT_OK;
+    tx_request.payload[1] = STATUS_CODE_OK;
+    memcpy(&tx_request.payload[2], burst_payload, ADC_BURST_PAYLOAD_SIZE);
+    tx_request.length  = 2U + ADC_BURST_PAYLOAD_SIZE;
+    tx_request.pending = true;
 }
 
 /* ==========================================================================
@@ -379,16 +391,19 @@ static void Command_HandleLoadSwitch(USART_Handle *handle,
         }
     }
 
-    /* Respond with current state */
-    uint8_t response = LoadSwitch_IsOn(id) ? 0x01U : 0x00U;
+    /* Response: [status1][status2][state] */
+    uint8_t response[3];
+    response[0] = STATUS_CAT_OK;
+    response[1] = STATUS_CODE_OK;
+    response[2] = LoadSwitch_IsOn(id) ? 0x01U : 0x00U;
 
     tx_request.msg1    = header->msg1;
     tx_request.msg2    = header->msg2;
     tx_request.cmd1    = header->cmd1;
     tx_request.cmd2    = header->cmd2;
-    tx_request.payload[0] = response;
-    tx_request.length  = 1U;
-    tx_request.pending = true;  /* Must be last — acts as the commit */
+    memcpy(tx_request.payload, response, sizeof(response));
+    tx_request.length  = sizeof(response);
+    tx_request.pending = true;
 }
 
 /* ==========================================================================
@@ -411,6 +426,10 @@ static void Command_HandleThermistor(USART_Handle *handle,
 
     uint16_t adc_result = 0U;
     float    temp_c;
+    uint8_t  response[6];  /* [status1][status2][4-byte float LE] */
+
+    response[0] = STATUS_CAT_OK;
+    response[1] = STATUS_CODE_OK;
 
     ADS7066_Status status = ADS7066_ReadChannel(&ads7066_3_handle,
                                                  channel, &adc_result);
@@ -418,12 +437,13 @@ static void Command_HandleThermistor(USART_Handle *handle,
     if (status == ADS7066_OK) {
         temp_c = Thermistor_AdcToTempC(adc_result);
     } else {
+        response[0] = STATUS_CAT_ADC;
+        response[1] = STATUS_ADS_READ_FAIL;
         uint32_t nan_bits = 0x7FC00000U;
         memcpy(&temp_c, &nan_bits, sizeof(temp_c));
     }
 
-    uint8_t response[4];
-    memcpy(response, &temp_c, sizeof(float));
+    memcpy(&response[2], &temp_c, sizeof(float));
 
     tx_request.msg1    = header->msg1;
     tx_request.msg2    = header->msg2;
@@ -431,7 +451,7 @@ static void Command_HandleThermistor(USART_Handle *handle,
     tx_request.cmd2    = header->cmd2;
     memcpy(tx_request.payload, response, sizeof(response));
     tx_request.length  = sizeof(response);
-    tx_request.pending = true;  /* Must be last — acts as the commit */
+    tx_request.pending = true;
 }
 
 /* ==========================================================================
@@ -456,8 +476,8 @@ static void Command_HandleGetBoardType(USART_Handle *handle,
     (void)payload;
 
     uint8_t response[5] = {
-        0x00U,              /* status_1 */
-        0x00U,              /* status_2: success */
+        STATUS_CAT_OK,      /* status_1: category */
+        STATUS_CODE_OK,     /* status_2: code     */
         0xFFU,              /* boardID (0xFF = motherboard) */
         MB_BOARD_ID_1,      /* 'M' (0x4D) */
         MB_BOARD_ID_2,      /* 'B' (0x42) */
@@ -588,18 +608,22 @@ void Command_ExecuteGantry(void)
                                       sizeof(response),
                                       GANTRY_TIMEOUT_MS);
 
-    if (len == 0U) {
-        /* Timeout — send "TIMEOUT" as the response */
-        memcpy(response, "TIMEOUT", 7);
-        len = 7U;
-    }
-
     tx_request.msg1   = gantry_request.msg1;
     tx_request.msg2   = gantry_request.msg2;
     tx_request.cmd1   = gantry_request.cmd1;
     tx_request.cmd2   = gantry_request.cmd2;
-    memcpy(tx_request.payload, response, len);
-    tx_request.length = len;
+
+    if (len == 0U) {
+        tx_request.payload[0] = STATUS_CAT_GANTRY;
+        tx_request.payload[1] = STATUS_GANTRY_TIMEOUT;
+        memcpy(&tx_request.payload[2], "TIMEOUT", 7);
+        tx_request.length = 9U;
+    } else {
+        tx_request.payload[0] = STATUS_CAT_OK;
+        tx_request.payload[1] = STATUS_CODE_OK;
+        memcpy(&tx_request.payload[2], response, len);
+        tx_request.length = 2U + len;
+    }
     tx_request.pending = true;
 }
 
@@ -619,7 +643,7 @@ static void Command_HandleActForward(const PacketHeader *header,
     if (header->length == 0U || payload == NULL) return;
 
     uint8_t board_id = payload[0];
-    if (board_id < 1U || board_id > ACT_MAX_BOARDS) return;
+    if (board_id >= ACT_MAX_BOARDS) return;
 
     act_forward_request.msg1     = header->msg1;
     act_forward_request.msg2     = header->msg2;

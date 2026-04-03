@@ -240,9 +240,9 @@ See [docs/thermistor.md](thermistor.md) for circuit details and conversion math.
 
 **Purpose:** Forward an ASCII command to the gantry system via RS485 (USART7 + MAX485) and return the response.
 
-**Request payload:** ASCII command string (e.g. `@01VER`), no null terminator. The firmware appends the null before sending over RS485.
+**Request payload:** ASCII command string (e.g. `@01VER`), no null terminator. The firmware appends a CR (`0x0D`) terminator before sending over RS485.
 
-**Response payload:** ASCII response string from the gantry (e.g. `PR01 V1.0`), no null terminator. If the gantry does not respond within 500 ms, the response is `TIMEOUT` (7 bytes).
+**Response payload:** `[status1][status2]` followed by ASCII response string from the gantry (e.g. `PR01 V1.0`), no null terminator. If the gantry does not respond within 500 ms, the response is `[0x08][0x01]` + `TIMEOUT` (9 bytes total). On success, status bytes are `[0x00][0x00]`.
 
 **Execution context:** ISR → deferred to main loop via `gantry_request` → `Command_ExecuteGantry()` performs polled RS485 TX/RX → result via `tx_request`.
 
@@ -381,12 +381,12 @@ This uses RS485 half-duplex communication via LTC2864 transceivers (UART5 for AC
 
 | boardID | UART | RS485 Transceiver | DE Pin |
 |---------|------|--------------------|--------|
-| 1 | UART5 | LTC2864 (ACT1) | PC8 (inverted) |
-| 2 | USART6 | LTC2864 (ACT2) | PG8 (inverted) |
+| 0 | UART5 | LTC2864 (ACT1) | PC8 (inverted) |
+| 1 | USART6 | LTC2864 (ACT2) | PG8 (inverted) |
 
 ### Request Payload
 
-Byte 0 = boardID (1 or 2), remaining bytes = actuator-board-specific payload.
+Byte 0 = boardID (0 or 1), remaining bytes = actuator-board-specific payload.
 
 ### Response Payload
 
@@ -420,9 +420,11 @@ For software engineers integrating with the motherboard, here is the exact byte 
 → [02] [m1] [m2] [00] [00] [DE] [AD] [CRC_hi] [CRC_lo] [7E]
                   len=0    cmd=DEAD
 
-← [02] [m1] [m2] [00] [08] [DE] [AD] [DE AD BE EF 01 02 03 04] [CRC] [7E]
-                  len=8    cmd=DEAD   fixed test payload
+← [02] [m1] [m2] [00] [0A] [DE] [AD] [s1] [s2] [DE AD BE EF 01 02 03 04] [CRC] [7E]
+                  len=10   cmd=DEAD   status     fixed test payload
 ```
+
+**Note:** As of v1.0.1, the firmware version string reported via PING is `"MB_R1 v1.0.1"`.
 
 ---
 
@@ -432,9 +434,9 @@ For software engineers integrating with the motherboard, here is the exact byte 
 → [02] [m1] [m2] [00] [00] [0C] [01] [CRC] [7E]
                   len=0
 
-← [02] [m1] [m2] [00] [04] [0C] [01] [b0] [b1] [b2] [b3] [CRC] [7E]
-                  len=4               32-bit LE, 18-bit ADC result
-                                      (0xFFFFFFFF = read error)
+← [02] [m1] [m2] [00] [06] [0C] [01] [s1] [s2] [b0] [b1] [b2] [b3] [CRC] [7E]
+                  len=6               status     32-bit LE, 18-bit ADC result
+                                                 (0xFFFFFFFF = read error)
 ```
 
 ---
@@ -444,9 +446,9 @@ For software engineers integrating with the motherboard, here is the exact byte 
 ```
 → [02] [m1] [m2] [00] [00] [0C] [02] [CRC] [7E]
 
-← [02] [m1] [m2] [01] [90] [0C] [02] [400 bytes: 100 x 4-byte LE samples] [CRC] [7E]
-                  len=400             each sample: 32-bit LE, 18-bit ADC result
-                                      (0xFFFFFFFF per failed sample)
+← [02] [m1] [m2] [01] [92] [0C] [02] [s1] [s2] [400 bytes: 100 x 4-byte LE samples] [CRC] [7E]
+                  len=402             status     each sample: 32-bit LE, 18-bit ADC result
+                                                 (0xFFFFFFFF per failed sample)
 ```
 
 ---
@@ -457,8 +459,8 @@ For software engineers integrating with the motherboard, here is the exact byte 
 → [02] [m1] [m2] [00] [01] [0C] [1x] [state] [CRC] [7E]
                   len=1              x=switch ID    0x01=ON, 0x00=OFF
 
-← [02] [m1] [m2] [00] [01] [0C] [1x] [actual] [CRC] [7E]
-                  len=1              echoed cmd     actual state after command
+← [02] [m1] [m2] [00] [03] [0C] [1x] [s1] [s2] [actual] [CRC] [7E]
+                  len=3              echoed cmd     status  actual state after command
 ```
 
 ### CMD_LOAD_* (0x0C10-0x0C19) — Query (empty payload)
@@ -467,8 +469,8 @@ For software engineers integrating with the motherboard, here is the exact byte 
 → [02] [m1] [m2] [00] [00] [0C] [1x] [CRC] [7E]
                   len=0
 
-← [02] [m1] [m2] [00] [01] [0C] [1x] [state] [CRC] [7E]
-                  len=1              current state (0x01=ON, 0x00=OFF)
+← [02] [m1] [m2] [00] [03] [0C] [1x] [s1] [s2] [state] [CRC] [7E]
+                  len=3              status         current state (0x01=ON, 0x00=OFF)
 ```
 
 Load switch IDs: x=0 Valve1, x=1 Valve2, x=2 Microplate, x=3 Fan, x=4 TEC1, x=5 TEC2, x=6 TEC3, x=7 Assembly, x=8 Daughter1, x=9 Daughter2.
@@ -481,12 +483,12 @@ Load switch IDs: x=0 Valve1, x=1 Valve2, x=2 Microplate, x=3 Fan, x=4 TEC1, x=5 
 → [02] [m1] [m2] [00] [00] [0C] [2x] [CRC] [7E]
                   len=0              x=0 therm1 ... x=5 therm6
 
-← [02] [m1] [m2] [00] [04] [0C] [2x] [f0] [f1] [f2] [f3] [CRC] [7E]
-                  len=4              IEEE 754 float, LE, temperature in °C
-                                     NaN (0x0000C07F LE) = read error or absent
+← [02] [m1] [m2] [00] [06] [0C] [2x] [s1] [s2] [f0] [f1] [f2] [f3] [CRC] [7E]
+                  len=6              status         IEEE 754 float, LE, temperature in °C
+                                                    NaN (0x0000C07F LE) = read error or absent
 ```
 
-Conversion: `memcpy(&float_val, &payload[0], 4)` on little-endian systems.
+Conversion: `memcpy(&float_val, &payload[2], 4)` on little-endian systems (offset by 2 for status bytes).
 
 ---
 
@@ -496,10 +498,12 @@ Conversion: `memcpy(&float_val, &payload[0], 4)` on little-endian systems.
 → [02] [m1] [m2] [00] [06] [0C] [30] [40 30 31 56 45 52] [CRC] [7E]
                   len=6              "@01VER" as ASCII bytes (no null)
 
-← [02] [m1] [m2] [00] [nn] [0C] [30] [ASCII response bytes...] [CRC] [7E]
-                  len=nn             gantry response (no null)
-                                     or "TIMEOUT" (7 bytes) on 500ms timeout
+← [02] [m1] [m2] [00] [nn] [0C] [30] [s1] [s2] [ASCII response bytes...] [CRC] [7E]
+                  len=nn             status     gantry response (no null)
+                                     or [0x08][0x01] + "TIMEOUT" (9 bytes total) on 500ms timeout
 ```
+
+On timeout, the status bytes are `[0x08][0x01]` (Gantry category, timeout error). On success, status bytes are `[0x00][0x00]`.
 
 ---
 
@@ -547,7 +551,7 @@ Same forwarding pattern as driverboard commands, but via RS485:
 ```
 GUI → Motherboard:
   [02] [m1] [m2] [len_hi] [len_lo] [cmd1] [cmd2] [boardID] [data...] [CRC] [7E]
-                                                    ↑ boardID = 1 or 2
+                                                    ↑ boardID = 0 or 1
 
 Motherboard → Actuator Board (RS485):
   [02] [m1] [m2] [len_hi] [len_lo] [cmd1] [cmd2] [boardID] [data...] [CRC] [7E]

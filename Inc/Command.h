@@ -35,7 +35,12 @@ extern "C" {
 
 /* ========================= Command Definitions ============================ */
 
-#define CMD_PING            CMD_CODE(0xDE, 0xAD)    /**< Ping / echo test        */
+#define CMD_PING            CMD_CODE(0xDE, 0xAD)    /**< Ping / firmware version */
+
+/* Firmware version */
+#define FW_VERSION_MAJOR    1U
+#define FW_VERSION_MINOR    0U
+#define FW_VERSION_PATCH    1U
 #define CMD_READ_ADC        CMD_CODE(0x0C, 0x01)    /**< Read LTC2338-18 ADC     */
 #define CMD_BURST_ADC       CMD_CODE(0x0C, 0x02)    /**< Burst 100x ADC reads    */
 
@@ -130,6 +135,50 @@ extern "C" {
 /* Driverboard SET_LIST group size */
 #define DC_SET_GROUP_SIZE   5U      /**< [boardID][bank][SW_hi][SW_lo][state] */
 #define DC_GET_GROUP_SIZE   4U      /**< [boardID][bank][SW_hi][SW_lo]        */
+
+/* ========================= Response Status Codes ========================== *
+ *
+ *  Response format: [status1 = category] [status2 = code] [boardID] [data...]
+ *  Both 0x00 = success.  Non-zero = error.
+ *
+ *  Unified error table across all boards:
+ *    Category 0x01 = General         0x05 = Load Switch (MB)
+ *    Category 0x02 = Switch Matrix   0x06 = ADC/Sensor (MB)
+ *    Category 0x03 = HVSG/PWM (DB)   0x07 = Actuator (ACT)
+ *    Category 0x04 = PMU/INA228 (DB) 0x08 = Gantry (MB)
+ *                                    0x09 = Routing (MB)
+ * ========================================================================== */
+
+/* Success */
+#define STATUS_CAT_OK           0x00U
+#define STATUS_CODE_OK          0x00U
+
+/* Category 0x01 — General Errors */
+#define STATUS_CAT_GENERAL      0x01U
+#define STATUS_PAYLOAD_SHORT    0x01U
+#define STATUS_UNKNOWN_CMD      0x02U
+
+/* Category 0x05 — Load Switch Errors */
+#define STATUS_CAT_LOADSW       0x05U
+#define STATUS_LOADSW_INVALID   0x01U
+#define STATUS_LOADSW_FAILED    0x02U
+
+/* Category 0x06 — ADC/Sensor Errors */
+#define STATUS_CAT_ADC          0x06U
+#define STATUS_ADC_SPI_FAIL     0x01U
+#define STATUS_ADS_READ_FAIL    0x02U
+#define STATUS_THERM_NAN        0x03U
+
+/* Category 0x08 — Gantry RS485 Errors */
+#define STATUS_CAT_GANTRY       0x08U
+#define STATUS_GANTRY_TIMEOUT   0x01U
+#define STATUS_GANTRY_COMMERR   0x02U
+
+/* Category 0x09 — Routing Errors */
+#define STATUS_CAT_ROUTING      0x09U
+#define STATUS_ROUTE_DC_INVALID 0x01U
+#define STATUS_ROUTE_ACT_INVALID 0x02U
+#define STATUS_ROUTE_TIMEOUT    0x03U
 
 /* ========================= Burst ADC Constants ============================ */
 
