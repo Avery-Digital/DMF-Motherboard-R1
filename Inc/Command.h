@@ -39,10 +39,11 @@ extern "C" {
 
 /* Firmware version */
 #define FW_VERSION_MAJOR    1U
-#define FW_VERSION_MINOR    0U
-#define FW_VERSION_PATCH    1U
+#define FW_VERSION_MINOR    1U
+#define FW_VERSION_PATCH    0U
 #define CMD_READ_ADC        CMD_CODE(0x0C, 0x01)    /**< Read LTC2338-18 ADC     */
 #define CMD_BURST_ADC       CMD_CODE(0x0C, 0x02)    /**< Burst 100x ADC reads    */
+#define CMD_MEASURE_ADC     CMD_CODE(0x0C, 0x03)    /**< Switch-controlled ADC   */
 
 /* ---- Load Switch Commands (0x0C10–0x0C19) ----
  *
@@ -168,6 +169,8 @@ extern "C" {
 #define STATUS_ADC_SPI_FAIL     0x01U
 #define STATUS_ADS_READ_FAIL    0x02U
 #define STATUS_THERM_NAN        0x03U
+#define STATUS_ADC_DC_TIMEOUT   0x04U   /**< Daughtercard timeout during measure */
+#define STATUS_ADC_RESTORE_FAIL 0x05U   /**< Switch restore failed               */
 
 /* Category 0x08 — Gantry RS485 Errors */
 #define STATUS_CAT_GANTRY       0x08U
@@ -184,6 +187,18 @@ extern "C" {
 
 #define ADC_BURST_COUNT         100U    /**< Number of samples per burst     */
 #define ADC_BURST_PAYLOAD_SIZE  400U    /**< 100 samples × 4 bytes each      */
+
+/* ======================= Measure ADC Constants ============================ */
+
+#define MEASURE_ADC_DELAY_MIN_MS   1U     /**< Minimum delay in ms             */
+#define MEASURE_ADC_DELAY_MAX_MS   100U   /**< Maximum delay in ms             */
+#define MEASURE_ADC_DELAY_HDR_SIZE 2U     /**< Delay header: 2 bytes (uint16 LE) */
+#define MEASURE_ADC_SW_STATES      600U   /**< Switch states per board (2 banks × 300) */
+
+/* LTC2338-18 bipolar mode: ±10.24 V full-scale, 18-bit two's complement.
+ * LSB = 20.48 / 262144 = 78.125 µV.  Matches GUI PlotBurstADC scaling. */
+#define ADC_FULL_SCALE_V        20.48f    /**< Full bipolar span (±10.24 V)    */
+#define ADC_FULL_SCALE_CODES    262144.0f /**< 2^18 total codes                */
 
 /* =========================== Public API =================================== */
 
@@ -212,6 +227,18 @@ void Command_Dispatch(USART_Handle *handle,
  *         Must NOT be called from ISR context (SPI polling + ~300 µs).
  */
 void Command_ExecuteBurstADC(void);
+
+/**
+ * @brief  Execute a switch-controlled ADC measurement — main loop only.
+ *
+ *         Saves switch states, sets GND, enables specified switches,
+ *         waits a deterministic hardware-timed delay, burst-reads the ADC,
+ *         restores switch states, and returns Vpp + raw samples.
+ *
+ *         Uses TIM6 one-pulse mode for µs-precision deterministic timing.
+ *         Blocks the main loop for the duration of the entire sequence.
+ */
+void Command_ExecuteMeasureADC(void);
 
 #ifdef __cplusplus
 }

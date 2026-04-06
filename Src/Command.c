@@ -70,6 +70,10 @@ static void Command_HandleGantry(USART_Handle *handle,
 static void Command_HandleActForward(const PacketHeader *header,
                                       const uint8_t *payload);
 
+static void Command_HandleMeasureADC(USART_Handle *handle,
+                                      const PacketHeader *header,
+                                      const uint8_t *payload);
+
 /* ==========================================================================
  *  COMMAND DISPATCH
  *
@@ -95,6 +99,10 @@ void Command_Dispatch(USART_Handle *handle,
 
     case CMD_BURST_ADC:
         Command_HandleBurstADC(handle, header, payload);
+        break;
+
+    case CMD_MEASURE_ADC:
+        Command_HandleMeasureADC(handle, header, payload);
         break;
 
     /* ---- Load Switch Commands (0x0C10–0x0C19) ---- */
@@ -625,6 +633,59 @@ void Command_ExecuteGantry(void)
         tx_request.length = 2U + len;
     }
     tx_request.pending = true;
+}
+
+/* ==========================================================================
+ *  CMD_MEASURE_ADC (0x0C03) — ISR context, deferred to main loop
+ *
+ *  Atomic switch-controlled ADC measurement.  The ISR copies the delay
+ *  and switch groups into measure_adc_request; the main loop executes
+ *  the full save → GND → set → timer → ADC → restore → Vpp sequence.
+ *
+ *  Request payload:
+ *    Bytes [0..1] — delay in ms (uint16 LE, 1–100)
+ *    Bytes [2..N] — SET_LIST_OF_SW 5-byte groups:
+ *                   [boardID][bank][SW_hi][SW_lo][state]
+ *
+ *  Minimum payload: 7 bytes (2-byte delay + one 5-byte group)
+ * ========================================================================== */
+static void Command_HandleMeasureADC(USART_Handle *handle,
+                                      const PacketHeader *header,
+                                      const uint8_t *payload)
+{
+    (void)handle;
+
+    /* Need at least 2-byte delay + one 5-byte switch group */
+    if (header->length < (MEASURE_ADC_DELAY_HDR_SIZE + DC_SET_GROUP_SIZE)
+        || payload == NULL) {
+        tx_request.msg1    = header->msg1;
+        tx_request.msg2    = header->msg2;
+        tx_request.cmd1    = header->cmd1;
+        tx_request.cmd2    = header->cmd2;
+        tx_request.payload[0] = STATUS_CAT_GENERAL;
+        tx_request.payload[1] = STATUS_PAYLOAD_SHORT;
+        tx_request.length  = 2U;
+        tx_request.pending = true;
+        return;
+    }
+
+    /* Parse delay (uint16 LE) */
+    uint16_t delay_ms = (uint16_t)payload[0] | ((uint16_t)payload[1] << 8);
+    if (delay_ms < MEASURE_ADC_DELAY_MIN_MS) delay_ms = MEASURE_ADC_DELAY_MIN_MS;
+    if (delay_ms > MEASURE_ADC_DELAY_MAX_MS) delay_ms = MEASURE_ADC_DELAY_MAX_MS;
+
+    /* Switch payload starts after delay header */
+    uint16_t sw_len = header->length - MEASURE_ADC_DELAY_HDR_SIZE;
+
+    measure_adc_request.msg1     = header->msg1;
+    measure_adc_request.msg2     = header->msg2;
+    measure_adc_request.cmd1     = header->cmd1;
+    measure_adc_request.cmd2     = header->cmd2;
+    measure_adc_request.delay_ms = delay_ms;
+    memcpy(measure_adc_request.sw_payload,
+           &payload[MEASURE_ADC_DELAY_HDR_SIZE], sw_len);
+    measure_adc_request.sw_length = sw_len;
+    measure_adc_request.pending   = true;  /* Must be last — acts as commit */
 }
 
 /* ==========================================================================

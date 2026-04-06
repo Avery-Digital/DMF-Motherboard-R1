@@ -108,6 +108,224 @@ Where `n` ranges from 0 to 99.
 
 ---
 
+## CMD_MEASURE_ADC — `0x0C03`
+
+**Purpose:** Atomic switch-controlled ADC measurement with deterministic timing. Saves current switch states, sets all switches to GND, enables specified switches to HVSG, waits a hardware-timed delay, burst-reads the ADC, restores original switch states, and returns Vpp + raw samples.
+
+**Request payload:** 7+ bytes:
+
+| Byte | Content |
+|------|---------|
+| 0–1 | Delay in milliseconds (uint16 LE, clamped to 1–100 ms) |
+| 2+ | SET_LIST_OF_SW 5-byte groups: `[boardID][bank][SW_hi][SW_lo][state]` |
+
+Minimum payload: 7 bytes (2-byte delay + one 5-byte switch group).
+
+**Response payload:** 406 bytes:
+
+| Byte | Content |
+|------|---------|
+| 0 | status_1 (category: 0x00=OK, 0x06=ADC error) |
+| 1 | status_2 (code: 0x00=OK, 0x04=DC timeout, 0x05=restore fail) |
+| 2–5 | Vpp in volts (IEEE 754 float, little-endian) |
+| 6–405 | 100 ADC samples × 4 bytes each (same format as CMD_BURST_ADC) |
+
+**Vpp calculation:** See [Vpp Algorithm](#vpp-peak-to-peak-algorithm) section below for full details.
+
+**Execution context:** Two-stage deferred pattern:
+
+1. **ISR stage** (`Command_HandleMeasureADC`): Parses delay and switch groups into `measure_adc_request`, sets `.pending = true`.
+2. **Main loop stage** (`Command_ExecuteMeasureADC`): Executes the 7-phase blocking sequence:
+   - Phase 1: GET_ALL_SW (0x0B53) on ALL 4 boards → save 600-byte state arrays
+   - Phase 2: AllGND (0x0A02) on ALL 4 boards (clean measurement baseline)
+   - Phase 3: SET_LIST_OF_SW (0x0B51), batched per board
+   - Phase 4: TIM6 one-pulse wait (1 µs resolution, PSC=239 @ 240 MHz APB1 timer clock)
+   - Phase 5: 100× SPI_LTC2338_Read burst (~300 µs)
+   - Phase 6: AllGND + SET_LIST_OF_SW restore (only non-GND switches replayed)
+   - Phase 7: Vpp calculation → response via `tx_request`
+
+**Deterministic timing:** The hardware timer (TIM6) starts AFTER all switch-set confirmations are received. The delay represents exact time from "switches confirmed settled" to "ADC burst begins". Jitter is ±1 µs regardless of UART round-trip variations.
+
+**Error handling:** If GET_ALL_SW fails (Phase 1 timeout), the command aborts before modifying any switches. If Phase 2/3/6 timeout, the ADC measurement still completes but the response status indicates `STATUS_ADC_RESTORE_FAIL`.
+
+**Constants:**
+
+```c
+#define CMD_MEASURE_ADC             CMD_CODE(0x0C, 0x03)
+#define MEASURE_ADC_DELAY_MIN_MS    1U      /* Minimum delay */
+#define MEASURE_ADC_DELAY_MAX_MS    100U    /* Maximum delay */
+#define MEASURE_ADC_SW_STATES       600U    /* States per board (2×300) */
+#define ADC_FULL_SCALE_V            20.48f    /* ±10.24V bipolar span */
+#define ADC_FULL_SCALE_CODES        262144.0f /* 2^18 total codes */
+```
+
+**Example request** — Measure with 50 ms delay, enabling switch 42 on board 0 bank 0 to HVSG:
+
+```
+Payload: [32 00] [00 00 00 2A 01]
+          ^^^^    ^^ ^^ ^^^^ ^^
+         50 ms   bid bank sw  HVSG
+```
+
+---
+
+## Vpp Peak-to-Peak Algorithm
+
+### Overview
+
+The `CMD_MEASURE_ADC` response includes a peak-to-peak voltage (Vpp) calculated on-board in Phase 7 of `Command_ExecuteMeasureADC()` (`Src/main.c`). This section documents the current algorithm, its assumptions, limitations, and potential future improvements.
+
+### Current Algorithm: Global Min/Max
+
+**Method:** Scan all 100 ADC samples, find the minimum and maximum signed values, compute Vpp as the difference converted to volts.
+
+**Implementation** (`Src/main.c`, Phase 7):
+
+```c
+int32_t min_val = INT32_MAX;
+int32_t max_val = INT32_MIN;
+
+for (uint32_t i = 0U; i < ADC_BURST_COUNT; i++) {
+    int32_t s = (int32_t)(meas_burst_raw[i] & 0x3FFFFU);
+    /* Sign-extend bit 17 for two's complement */
+    if (s & 0x20000) {
+        s |= (int32_t)0xFFFC0000;
+    }
+    if (s < min_val) min_val = s;
+    if (s > max_val) max_val = s;
+}
+
+float vpp = (float)(max_val - min_val) * (ADC_FULL_SCALE_V / ADC_FULL_SCALE_CODES);
+```
+
+**Step-by-step:**
+
+1. **Raw extraction:** Each 32-bit SPI word is masked to 18 bits (`& 0x3FFFF`), yielding an unsigned value 0–262143.
+2. **Sign extension:** Bit 17 is the sign bit. If set, the upper 14 bits are filled with 1s (`|= 0xFFFC0000`), converting to a signed 32-bit integer in the range −131072 to +131071.
+3. **Min/max search:** A single pass over all 100 samples tracks the global minimum and maximum.
+4. **Voltage conversion:** `Vpp_codes = max_val - min_val` (always positive). Multiply by the LSB voltage: `20.48 / 262144 = 78.125 µV per code`. Result is Vpp in volts as an IEEE 754 float.
+
+### ADC Scaling
+
+| Parameter | Value |
+|-----------|-------|
+| ADC | LTC2338-18 |
+| Resolution | 18 bits |
+| Mode | Bipolar (two's complement) |
+| Full-scale range | ±10.24 V |
+| Full span | 20.48 V |
+| Total codes | 2^18 = 262144 |
+| LSB | 20.48 / 262144 = 78.125 µV |
+| Code range | −131072 to +131071 |
+| Matches GUI | `PlotBurstADC()` in `Form1.cs:925`: `lsbVolts = 20.48 / 262144.0` |
+
+### Assumptions
+
+1. **Multiple complete periods captured.** The burst captures ~300 µs of signal. For a 10 kHz waveform (100 µs period), this is ~3 complete periods — sufficient for min/max to find the true peaks. For lower frequencies, fewer cycles are captured and accuracy degrades.
+2. **Peaks are present in the sample set.** With 100 samples over ~3 periods, the sampling interval (~3 µs) is much shorter than the signal period (100 µs), so the probability of missing a peak by more than 1 LSB is low.
+3. **No significant noise spikes.** Min/max is sensitive to outliers. A single noise spike will inflate Vpp. The algorithm does not reject outliers.
+4. **DC offset does not matter.** Min/max measures the full swing regardless of any DC bias (e.g., the ~58 Hz mains-coupled offset documented in `docs/spi_adc.md`).
+5. **Rising vs. falling edge sampling is irrelevant.** Min/max does not depend on which edge a sample falls on — it simply finds the extremes over the entire burst window.
+
+### Limitations
+
+| Limitation | Impact | When it matters |
+|------------|--------|-----------------|
+| **Noise sensitivity** | A single outlier inflates Vpp | High-EMI environment, long cable runs, or unshielded analog input |
+| **Low frequency signals** | If < 1 full period is captured in 300 µs (< ~3.3 kHz), Vpp underestimates the true amplitude | Measuring signals below ~3 kHz |
+| **No per-cycle analysis** | Cannot distinguish Vpp variation between cycles (e.g., amplitude modulation or transient decay) | Signals with changing amplitude over the burst window |
+| **No frequency information** | Vpp alone says nothing about signal frequency | When frequency is also needed for impedance calculations |
+| **58 Hz mains noise** | The ~±1 V mains-coupled noise adds to the signal, inflating Vpp by up to ~2 V | Precision measurements where mains noise is significant relative to signal |
+| **No RMS** | Vpp ≠ RMS. For a pure sine wave, Vrms = Vpp / (2√2). For complex waveforms the relationship varies | When power or energy calculations are needed |
+
+### Potential Future Improvements
+
+The raw 100-sample burst data is always returned alongside Vpp in the response payload, so more sophisticated algorithms can be implemented either in firmware or in the GUI/host software. Below are candidate approaches for future iterations:
+
+#### 1. Percentile-Based Peak Detection (Noise Rejection)
+
+Replace min/max with percentile thresholds (e.g., 2nd and 98th percentile) to reject outlier spikes:
+
+```
+Sort samples[0..99]
+min_est = samples[2]     // 2nd percentile
+max_est = samples[97]    // 98th percentile
+Vpp = (max_est - min_est) × lsb_volts
+```
+
+**Pros:** Rejects up to 2 outlier spikes per tail. Simple, O(N log N) sort on 100 elements.
+**Cons:** Slightly underestimates true Vpp if peaks are real. Requires choosing percentile thresholds empirically.
+
+#### 2. Zero-Crossing Period Detection + Per-Cycle Peak
+
+Detect zero crossings to identify individual cycles, then find min/max within each cycle and average:
+
+```
+1. Compute DC offset = mean of all samples
+2. Subtract DC offset from each sample
+3. Find zero crossings (sign changes between consecutive samples)
+4. For each complete cycle (between consecutive same-direction crossings):
+     Record local min and local max
+5. Vpp = mean(cycle_max - cycle_min) across all complete cycles
+```
+
+**Pros:** Per-cycle Vpp gives amplitude consistency information. Rejects inter-cycle noise. Can also extract frequency.
+**Cons:** More complex. Requires at least 1 complete cycle. Sensitive to DC offset estimation quality.
+
+#### 3. DFT/FFT Fundamental Extraction
+
+Compute a discrete Fourier transform on the 100 samples, identify the fundamental frequency bin, and compute Vpp from its magnitude:
+
+```
+1. Apply window function (Hanning) to 100 samples
+2. Compute 100-point DFT (or zero-pad to 128 for FFT)
+3. Find bin with maximum magnitude (fundamental frequency)
+4. Vpp = 2 × magnitude × correction_factor / N
+```
+
+**Pros:** Immune to noise at other frequencies. Can extract both amplitude and frequency. Can reject the 58 Hz mains noise by ignoring that bin.
+**Cons:** Computationally expensive for bare-metal (though 100 points is manageable). Spectral leakage requires windowing. Assumes signal is dominated by a single frequency. Would require `<math.h>` trig functions or a lookup table.
+
+#### 4. Sinusoidal Curve Fit (Least-Squares)
+
+Fit a sine wave `A × sin(2πft + φ) + C` to the 100 samples using iterative least-squares:
+
+```
+1. Estimate frequency from zero crossings or autocorrelation
+2. Linearize: fit A×sin(ωt) + B×cos(ωt) + C via 3-parameter linear regression
+3. Amplitude = √(A² + B²)
+4. Vpp = 2 × Amplitude
+```
+
+**Pros:** Most accurate for sine-wave signals. Gives amplitude, frequency, phase, and DC offset. Naturally rejects noise not at the signal frequency.
+**Cons:** Most computationally expensive. Requires frequency estimate as input. Assumes sinusoidal signal shape. Floating-point intensive.
+
+#### 5. Mains Noise Subtraction
+
+Pre-process samples to remove the 58–60 Hz mains-coupled noise before Vpp calculation:
+
+```
+1. Compute mean of all 100 samples (DC + mains offset)
+2. Subtract mean from each sample (removes DC and most of mains since burst << mains period)
+3. Apply min/max on the mean-subtracted samples
+```
+
+**Pros:** Simple. The ~300 µs burst window is ≪ 17 ms mains period, so the mains component is nearly constant within a burst and is largely removed by mean subtraction.
+**Cons:** Only removes the DC component of the mains noise within the burst window. Does not help if mains frequency is close to the signal frequency.
+
+### Recommendation Path
+
+For increasing sophistication:
+
+1. **Current** — Global min/max (implemented, v1.1.0)
+2. **Next** — Mean subtraction + min/max (low cost, removes mains DC offset)
+3. **Later** — Zero-crossing per-cycle peaks (adds frequency info, per-cycle consistency)
+4. **Advanced** — FFT or curve fit (when impedance spectroscopy or multi-frequency analysis is needed)
+
+The raw ADC data is always available in the response for the GUI or host software to implement any of these algorithms without firmware changes.
+
+---
+
 ## CMD_LOAD_* — Load Switch Control (0x0C10–0x0C19)
 
 **Purpose:** Enable, disable, or query the state of the 10 high-side load switches (VN5T016AH). All 10 commands share a single handler (`Command_HandleLoadSwitch`) that receives a `LoadSwitch_ID` parameter to select the target switch.

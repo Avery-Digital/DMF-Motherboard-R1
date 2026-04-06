@@ -12,8 +12,9 @@
 │   │ Sequence │        │ CMD_PING  0xDEAD │          │
 │   │ Main Loop│        │ CMD_READ_ADC     │          │
 │   │ (deferred│        │ CMD_BURST_ADC    │          │
-│   │  TX +    │        │ CMD_LOAD_* x10   │          │
-│   │  burst + │        │ CMD_THERM1-6     │          │
+│   │  TX +    │        │ CMD_MEASURE_ADC  │          │
+│   │  burst + │        │ CMD_LOAD_* x10   │          │
+│   │  measure+│        │ CMD_THERM1-6     │          │
 │   │  DC fwd) │        │ DC routing (26)  │          │
 │   └──────────┘        └──────────────────┘          │
 ├─────────────────────────────────────────────────────┤
@@ -184,8 +185,12 @@ Command handler sets:                 while (1) {
   tx_request.msg1 = ...                 if (burst_request.pending) {
   tx_request.cmd1 = ...                   burst_request.pending = false;
   tx_request.payload = ...                Command_ExecuteBurstADC();
-  tx_request.length = ...                 // fills tx_request internally
-  tx_request.pending = true  ──────►    }
+  tx_request.length = ...               }
+  tx_request.pending = true  ──────►    if (measure_adc_request.pending) {
+                                          measure_adc_request.pending = false;
+                                          Command_ExecuteMeasureADC();
+                                          // save→GND→set→TIM6→ADC→restore→Vpp
+                                        }
                                         if (tx_request.pending) {
                                           tx_request.pending = false;
                                           USART_Driver_SendPacket()
@@ -247,6 +252,70 @@ Command_ExecuteBurstADC()             ← main loop context
     │   (0xFFFFFFFF sentinel on failure)
     ▼
 Copy 400 bytes → tx_request.payload
+Set tx_request.pending = true
+    │
+    ▼
+Main loop → USART_Driver_SendPacket() → DMA TX
+```
+
+## Data Flow — Switch-Controlled ADC Measurement
+
+```
+CMD_MEASURE_ADC (0x0C03) received
+    │
+    ▼
+Command_HandleMeasureADC()           ← ISR context (fast)
+    │ Parses 2-byte delay + switch groups
+    │ Copies to measure_adc_request
+    │ Sets measure_adc_request.pending = true
+    ▼
+Returns to ISR
+
+    ═══════════════════════════════════
+
+Main loop detects measure_adc_request.pending
+    │
+    ▼
+Command_ExecuteMeasureADC()          ← main loop context (blocking)
+    │
+    │ Phase 1: Save switch states on ALL 4 boards
+    │   for bid = 0..3:
+    │     dc_list_active = true
+    │     DC_Uart_SendPacket(GET_ALL_SW 0x0B53)
+    │     Poll dc_response.ready (500ms timeout)
+    │     save_buf[bid] ← 600 bytes switch state
+    │
+    │ Phase 2: Set ALL 4 boards to GND
+    │   for bid = 0..3:
+    │     DC_Uart_SendPacket(AllGND 0x0A02)
+    │     Poll dc_response.ready
+    │
+    │ Phase 3: Enable measurement switches
+    │   Bucket switch groups by boardID
+    │   for each non-empty board:
+    │     DC_Uart_SendPacket(SET_LIST_OF_SW 0x0B51)
+    │     Poll dc_response.ready
+    │
+    │ Phase 4: Deterministic wait (TIM6 one-pulse)
+    │   TIM6 PSC=239 (1 µs tick), ARR=delay_ms×1000-1
+    │   Enable counter → poll UIF flag → stop
+    │
+    │ Phase 5: Burst ADC read (100 samples)
+    │   for i = 0..99:
+    │     SPI_LTC2338_Read() → meas_burst_raw[i]
+    │     Pack as 4-byte LE
+    │
+    │ Phase 6: Restore ALL 4 boards
+    │   for bid = 0..3:
+    │     DC_Uart_SendPacket(AllGND)
+    │     Convert save_buf[bid] → SET_LIST_OF_SW groups
+    │     DC_Uart_SendPacket(SET_LIST_OF_SW)
+    │
+    │ Phase 7: Calculate Vpp
+    │   Sign-extend 18-bit two's complement samples
+    │   Vpp = (max - min) × (20.48 / 262144)
+    ▼
+tx_request ← [status][Vpp float][400B ADC data]
 Set tx_request.pending = true
     │
     ▼

@@ -1,5 +1,46 @@
 # Changelog
 
+## v1.1.0 — 2026-04-05
+
+### New Command: CMD_MEASURE_ADC (0x0C03)
+- Atomic switch-controlled ADC measurement with deterministic timing
+- Full sequence: save all 4 boards' switch states → AllGND all 4 boards → enable specified switches → hardware-timed delay → 100-sample ADC burst → restore all boards → return Vpp + raw data
+- Uses TIM6 one-pulse mode for µs-precision deterministic timing between switch settle and ADC read
+- Configurable delay via payload (1–100 ms, uint16 LE)
+- Returns IEEE 754 float Vpp (peak-to-peak voltage) + 400 bytes raw ADC samples
+- Peak-to-peak calculated as simple min/max on signed 18-bit two's complement samples
+- ADC voltage scaling: ±10.24 V bipolar, LSB = 20.48/262144 = 78.125 µV (matches GUI PlotBurstADC)
+
+### Request Payload Format
+```
+[delay_ms_lo][delay_ms_hi][5-byte switch groups...]
+```
+Each group: `[boardID][bank][SW_hi][SW_lo][state]` (same as SET_LIST_OF_SW)
+
+### Response Payload Format (406 bytes)
+```
+[status1][status2][Vpp float LE (4B)][100 × 4-byte ADC samples (400B)]
+```
+
+### New Status Codes
+- `0x06 / 0x04` — Daughtercard timeout during measure sequence
+- `0x06 / 0x05` — Switch restore failed (ADC data still valid)
+
+### New Constants
+- `ADC_FULL_SCALE_V = 20.48f` (±10.24 V bipolar span)
+- `ADC_FULL_SCALE_CODES = 262144.0f` (2^18)
+- `MEASURE_ADC_DELAY_MIN_MS = 1`, `MEASURE_ADC_DELAY_MAX_MS = 100`
+- `MEASURE_ADC_SW_STATES = 600` (2 banks × 300 switches per board)
+
+### Files Modified
+- `Inc/Command.h` — New command code, constants, status codes, function declaration
+- `Inc/main.h` — New `MeasureAdcRequest` struct
+- `Src/Command.c` — ISR handler `Command_HandleMeasureADC` + dispatch case
+- `Src/main.c` — Global request instance, main loop check, `Command_ExecuteMeasureADC()` (7-phase blocking function using TIM6)
+- `docs/command_reference.md` — Full CMD_MEASURE_ADC documentation
+
+---
+
 ## v1.0.1 — 2026-04-03
 
 ### Unified Status Bytes

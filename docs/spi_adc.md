@@ -121,6 +121,11 @@ The DAC80508 driver uses the same reconfigure pattern, additionally switching CP
 
 **Concurrency constraint:** `SPI_LTC2338_Read()`, `DRV8702_WriteReg()`/`DRV8702_ReadReg()`, `DAC80508_WriteReg()`/`DAC80508_ReadReg()`, and `ADS7066_WriteReg()`/`ADS7066_ReadReg()`/`ADS7066_ReadChannel()` must not be called concurrently. Currently safe because there is no RTOS and all SPI access is sequential.
 
+**ADC consumers:** Three commands read the LTC2338-18:
+- `CMD_READ_ADC` (0x0C01) — single read, ISR context
+- `CMD_BURST_ADC` (0x0C02) — 100-sample burst, main loop context
+- `CMD_MEASURE_ADC` (0x0C03) — switch-controlled 100-sample burst with TIM6 deterministic timing, main loop context. Includes Vpp peak-to-peak calculation using ±10.24 V bipolar scaling (LSB = 20.48/262144).
+
 ## Chip Select Lines
 
 Seven chip-select lines on GPIOD (PD0–PD6) are configured by each device driver's Init() function and driven HIGH (deasserted):

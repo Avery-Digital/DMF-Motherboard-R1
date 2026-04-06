@@ -102,6 +102,23 @@ typedef struct {
     uint8_t         cmd1, cmd2;
 } DcResponse;
 
+/* =================== Measure ADC Request ================================= */
+
+/**
+ * @brief  Deferred request for CMD_MEASURE_ADC (0x0C03).
+ *         ISR copies switch groups and delay, main loop executes the full
+ *         save → GND → set → timer → ADC → restore → Vpp sequence.
+ */
+typedef struct {
+    volatile bool   pending;
+    uint8_t         msg1, msg2, cmd1, cmd2;
+    uint8_t         sw_payload[PKT_MAX_PAYLOAD]; /**< Switch groups (5B each)  */
+    uint16_t        sw_length;                    /**< Total switch payload bytes */
+    uint16_t        delay_ms;                     /**< Deterministic delay in ms  */
+} MeasureAdcRequest;
+
+extern MeasureAdcRequest measure_adc_request;
+
 /* =================== Gantry RS485 Request ================================ */
 
 /**

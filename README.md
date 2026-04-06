@@ -187,16 +187,17 @@ The main loop handles deferred tasks that are too heavy or unsafe for ISR contex
 
 ```c
 while (1) {
-    if (burst_request.pending)       →  Command_ExecuteBurstADC()         // 100x SPI reads
-    if (dc_forward_request.pending)  →  Forward packet to DC UART        // Daughtercard async routing
-    if (act_forward_request.pending) →  Forward packet to ACT UART       // Actuator board async routing
-    if (gantry_request.pending)      →  Command_ExecuteGantry()          // RS485 polled TX/RX
-    if (dc_list_request.pending)     →  Sequential SET/GET_LIST_OF_SW    // Synchronous bulk switch ops
-    if (tx_request.pending)          →  USART_Driver_SendPacket()         // DMA TX
+    if (burst_request.pending)         →  Command_ExecuteBurstADC()         // 100x SPI reads
+    if (dc_forward_request.pending)    →  Forward packet to DC UART        // Daughtercard async routing
+    if (act_forward_request.pending)   →  Forward packet to ACT UART       // Actuator board async routing
+    if (gantry_request.pending)        →  Command_ExecuteGantry()          // RS485 polled TX/RX
+    if (measure_adc_request.pending)   →  Command_ExecuteMeasureADC()      // Switch-controlled ADC (TIM6)
+    if (dc_list_request.pending)       →  Sequential SET/GET_LIST_OF_SW    // Synchronous bulk switch ops
+    if (tx_request.pending)            →  USART_Driver_SendPacket()         // DMA TX
 }
 ```
 
-ISR-context command handlers populate `tx_request`, `burst_request`, `dc_forward_request`, `act_forward_request`, `dc_list_request`, or `gantry_request` and set `.pending = true`. The main loop performs the actual work.
+ISR-context command handlers populate `tx_request`, `burst_request`, `dc_forward_request`, `act_forward_request`, `measure_adc_request`, `dc_list_request`, or `gantry_request` and set `.pending = true`. The main loop performs the actual work.
 
 ## Communication Protocol
 
@@ -221,6 +222,7 @@ See [docs/packet_protocol.md](docs/packet_protocol.md) for the full specificatio
 | `CMD_PING` | `0xDEAD` | (ignored) | 8 bytes: `DE AD BE EF 01 02 03 04` | ISR → deferred TX |
 | `CMD_READ_ADC` | `0x0C01` | (none) | 4 bytes: 18-bit ADC result, LE | ISR → deferred TX |
 | `CMD_BURST_ADC` | `0x0C02` | (none) | 400 bytes: 100 x 4-byte LE samples | ISR → deferred burst + TX |
+| `CMD_MEASURE_ADC` | `0x0C03` | 2B delay (ms LE) + 5B switch groups | 406 bytes: status + Vpp float + 100 ADC samples | ISR → deferred measure (TIM6 + SPI2) |
 | `CMD_LOAD_*` | `0x0C10`–`0x0C19` | 1 byte: 0x01=ON, 0x00=OFF (or empty for query) | 1 byte: state (0x01/0x00) | ISR → deferred TX |
 | `CMD_THERM1`–`CMD_THERM6` | `0x0C20`–`0x0C25` | (none) | 4 bytes: float temperature (°C) | ISR → deferred TX |
 | `CMD_GANTRY_CMD` | `0x0C30` | ASCII command string | ASCII response (or "TIMEOUT") | ISR → deferred RS485 TX/RX |
