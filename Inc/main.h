@@ -139,7 +139,7 @@ void Command_ExecuteGantry(void);
 #define DC_LIST_MODE_SET    1U      /**< SET_LIST_OF_SW (5-byte groups)      */
 #define DC_LIST_MODE_GET    2U      /**< GET_LIST_OF_SW (4-byte groups)      */
 #define DC_RESPONSE_TIMEOUT 10U     /**< Timeout in ms for async responses   */
-#define DC_LIST_TIMEOUT     500U    /**< Timeout in ms for batched list cmds */
+#define DC_LIST_TIMEOUT     100U    /**< Timeout in ms for batched list cmds */
 #define DC_MAX_BOARDS       4U      /**< Number of daughtercard slots        */
 
 extern TxRequest        tx_request;
