@@ -656,18 +656,17 @@ void Command_ExecuteMeasureADC(void)
     static uint8_t save_buf[DC_MAX_BOARDS][MEASURE_ADC_SW_STATES];
     bool     save_valid[DC_MAX_BOARDS] = {false};
     bool     error_occurred = false;
-    uint8_t  error_cat  = STATUS_CAT_OK;
-    uint8_t  error_code = STATUS_CODE_OK;
 
     /* Signal ISR to route DC responses to mailbox */
     dc_list_active = true;
 
     /* ==================================================================
-     *  PHASE 1: Save current switch states on ALL 4 boards (GET_ALL_SW)
+     *  PHASE 1: Save current switch states on connected boards (GET_ALL_SW)
      *
-     *  Every board must be saved and later restored, not just the ones
-     *  referenced in the switch payload, because Phase 2 sets ALL boards
-     *  to GND for a clean measurement baseline.
+     *  Try every board — boards that don't respond (timeout) are marked
+     *  save_valid[bid] = false and skipped in all subsequent phases.
+     *  This allows the measurement to proceed even if no driver boards
+     *  are plugged in.
      * ================================================================== */
     for (uint8_t bid = 0U; bid < DC_MAX_BOARDS; bid++) {
         DC_Uart_Handle *dc = DC_GetHandle(bid);
@@ -697,34 +696,19 @@ void Command_ExecuteMeasureADC(void)
                 save_valid[bid] = true;
             }
             dc_response.ready = false;
-        } else {
-            error_occurred = true;
-            error_cat  = STATUS_CAT_ADC;
-            error_code = STATUS_ADC_DC_TIMEOUT;
         }
-    }
-
-    /* Abort if any board save failed — switches were not modified yet */
-    if (error_occurred) {
-        dc_list_active = false;
-        tx_request.msg1    = measure_adc_request.msg1;
-        tx_request.msg2    = measure_adc_request.msg2;
-        tx_request.cmd1    = measure_adc_request.cmd1;
-        tx_request.cmd2    = measure_adc_request.cmd2;
-        tx_request.payload[0] = error_cat;
-        tx_request.payload[1] = error_code;
-        tx_request.length  = 2U;
-        tx_request.pending = true;
-        return;
+        /* Timeout = board not connected, save_valid stays false — skip it */
     }
 
     /* ==================================================================
-     *  PHASE 2: Set ALL 4 boards to GND (AllGND / 0x0A02)
+     *  PHASE 2: Set connected boards to GND (AllGND / 0x0A02)
      *
-     *  Every board is grounded for a clean measurement baseline,
-     *  ensuring no stray switch on any board affects the ADC reading.
+     *  Only boards that responded in Phase 1 are grounded.
+     *  Boards that didn't respond are skipped (not connected).
      * ================================================================== */
     for (uint8_t bid = 0U; bid < DC_MAX_BOARDS; bid++) {
+        if (!save_valid[bid]) continue;
+
         DC_Uart_Handle *dc = DC_GetHandle(bid);
         if (dc == NULL) continue;
 
@@ -774,6 +758,7 @@ void Command_ExecuteMeasureADC(void)
 
     for (uint8_t bid = 0U; bid < DC_MAX_BOARDS; bid++) {
         if (batch_len[bid] == 0U) continue;
+        if (!save_valid[bid]) continue;  /* Board not connected */
 
         DC_Uart_Handle *dc = DC_GetHandle(bid);
         if (dc == NULL) continue;
