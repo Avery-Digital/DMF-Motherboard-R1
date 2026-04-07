@@ -200,9 +200,10 @@ extern "C" {
  * Calibrate on scope if needed. */
 #define SWITCH_ENABLE_TIME_US      3000U  /**< ~3 ms per switch (conservative)  */
 
-/* Estimated time for PWM phase sync on the driver board.
- * Covers 1× UART packet + 3 register writes (sub-µs).  Calibrate on scope. */
-#define PWM_PHASE_SYNC_TIME_US     2000U  /**< ~2 ms for sync cmd (conservative) */
+/* PWMPhaseSync command code for driver board (0x0A81).
+ * Resets TIM2/TIM1/TIM8 counters to zero for deterministic phase.
+ * Phase 3 sends this and waits for the response before starting TIM6,
+ * so no timing constant is needed in the timer calculation. */
 
 /* LTC2338-18 bipolar mode: ±10.24 V full-scale, 18-bit two's complement.
  * LSB = 20.48 / 262144 = 78.125 µV.  Matches GUI PlotBurstADC scaling. */

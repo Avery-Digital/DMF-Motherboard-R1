@@ -290,12 +290,14 @@ Command_ExecuteMeasureADC()          ← main loop context (blocking)
     │     DC_Uart_SendPacket(AllGND 0x0A02)
     │     Poll dc_response.ready
     │
-    │ Phase 3+4: PWM phase sync + timer-first switch enable
-    │   Bucket switch groups by boardID
-    │   total_us = PWM_PHASE_SYNC + num_switches × 3000 + delay_ms × 1000
-    │   START TIM6 (PSC=2399, 10 µs tick, ARR=total_us/10-1)
+    │ Phase 3: PWM phase sync (synchronous)
     │   for each board with switches:
-    │     DC_Uart_SendPacket(PWMPhaseSync 0x0A81)  ← resets TIM2/1/8 counters
+    │     DC_Uart_SendPacket(PWMPhaseSync 0x0A81)
+    │     Wait for dc_response.ready  ← confirms TIM2/1/8 reset
+    │
+    │ Phase 4: Timer-first switch enable
+    │   total_us = num_switches × 3000 + delay_ms × 1000
+    │   START TIM6 (PSC=239, 1 µs tick, ARR=total_us-1)
     │   for each non-empty board:
     │     DC_Uart_SendPacket(SET_LIST_OF_SW 0x0B51)  ← fire-and-forget
     │   Poll TIM6 UIF flag → stop

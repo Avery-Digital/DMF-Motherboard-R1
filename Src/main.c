@@ -700,6 +700,26 @@ void Command_ExecuteMeasureADC(void)
         /* Timeout = board not connected, save_valid stays false — skip it */
     }
 
+    /* Abort if no boards responded — measurement cannot proceed */
+    {
+        bool any_valid = false;
+        for (uint8_t bid = 0U; bid < DC_MAX_BOARDS; bid++) {
+            if (save_valid[bid]) { any_valid = true; break; }
+        }
+        if (!any_valid) {
+            dc_list_active = false;
+            tx_request.msg1    = measure_adc_request.msg1;
+            tx_request.msg2    = measure_adc_request.msg2;
+            tx_request.cmd1    = measure_adc_request.cmd1;
+            tx_request.cmd2    = measure_adc_request.cmd2;
+            tx_request.payload[0] = STATUS_CAT_ADC;
+            tx_request.payload[1] = STATUS_ADC_RESTORE_FAIL;
+            tx_request.length  = 2U;
+            tx_request.pending = true;
+            return;
+        }
+    }
+
     /* ==================================================================
      *  PHASE 2: Set connected boards to GND (AllGND / 0x0A02)
      *
@@ -735,22 +755,13 @@ void Command_ExecuteMeasureADC(void)
     }
 
     /* ==================================================================
-     *  PHASE 3+4: PWM phase sync + switch enable under deterministic timer
+     *  PHASE 3: PWM phase sync — send and WAIT for response
      *
-     *  1. Bucket switch groups by boardID, track which boards need sync
-     *  2. Start TIM6 (phase sync + switch enable + user delay)
-     *  3. Fire PWMPhaseSync (0x0A81) to each board — resets TIM2/TIM1/TIM8
-     *  4. Fire SET_LIST_OF_SW per board
-     *  5. Spin on TIM6 UIF → ADC burst
-     *
-     *  Timer value = PWM_PHASE_SYNC_TIME_US
-     *              + (num_switches × SWITCH_ENABLE_TIME_US)
-     *              + (delay_ms × 1000)
-     *
-     *  TIM6 configuration (16-bit basic timer):
-     *    APB1 timer clock = 240 MHz (D2PPRE1 = ÷2 → timer ×2)
-     *    PSC = 2399 → 100 kHz → 10 µs per tick (max ARR 65535 → 655 ms)
-     *    ARR = total_us / 10 - 1
+     *  The response confirms the driver board has reset TIM2/TIM1/TIM8
+     *  counters to zero.  TIM6 starts AFTER the response arrives so the
+     *  timer is locked to the actual counter reset, not to when we sent
+     *  the command.  The UART response transit time is constant (fixed
+     *  packet size, fixed baud rate), so the offset is deterministic.
      * ================================================================== */
     /* Bucket groups by boardID */
     static uint8_t batch_buf[DC_MAX_BOARDS][PKT_MAX_PAYLOAD];
@@ -770,24 +781,7 @@ void Command_ExecuteMeasureADC(void)
         }
     }
 
-    /* Compute total timer value: phase sync + switch enable + settling */
-    uint32_t total_us = PWM_PHASE_SYNC_TIME_US
-                      + ((uint32_t)num_groups * SWITCH_ENABLE_TIME_US)
-                      + ((uint32_t)delay_ms * 1000U);
-    uint32_t arr_val  = (total_us / 10U) - 1U;
-    if (arr_val > 65535U) arr_val = 65535U;  /* Clamp to 16-bit max */
-
-    /* Start TIM6 BEFORE sending any commands */
-    LL_APB1_GRP1_EnableClock(LL_APB1_GRP1_PERIPH_TIM6);
-
-    LL_TIM_SetPrescaler(TIM6, 2399U);       /* 240 MHz / 2400 = 100 kHz = 10 µs */
-    LL_TIM_SetAutoReload(TIM6, arr_val);
-    LL_TIM_SetOnePulseMode(TIM6, LL_TIM_ONEPULSEMODE_SINGLE);
-    LL_TIM_GenerateEvent_UPDATE(TIM6);       /* Force PSC/ARR load */
-    LL_TIM_ClearFlag_UPDATE(TIM6);           /* Clear UIF from UG */
-    LL_TIM_EnableCounter(TIM6);              /* Start counting */
-
-    /* Fire PWMPhaseSync (0x0A81) to each board — resets PWM counters to zero */
+    /* Send PWMPhaseSync (0x0A81) to each board and wait for response */
     for (uint8_t bid = 0U; bid < DC_MAX_BOARDS; bid++) {
         if (!board_needs_sync[bid]) continue;
         if (!save_valid[bid]) continue;
@@ -795,13 +789,47 @@ void Command_ExecuteMeasureADC(void)
         DC_Uart_Handle *dc = DC_GetHandle(bid);
         if (dc == NULL) continue;
 
+        dc_response.ready = false;
+
         uint8_t sync_payload[1] = { bid };
         DC_Uart_SendPacket(dc,
                            measure_adc_request.msg1,
                            measure_adc_request.msg2,
                            0x0AU, 0x81U,  /* PWMPhaseSync */
                            sync_payload, 1U);
+
+        uint32_t t0 = LL_GetTick();
+        while (!dc_response.ready) {
+            if ((LL_GetTick() - t0) >= DC_LIST_TIMEOUT) break;
+        }
+        dc_response.ready = false;
     }
+
+    /* ==================================================================
+     *  PHASE 4: Start TIM6 AFTER phase sync confirmed, then fire switches
+     *
+     *  Timer is now locked to the actual PWM counter reset.
+     *  Timer value = (num_switches × SWITCH_ENABLE_TIME_US) + (delay_ms × 1000)
+     *
+     *  TIM6 configuration (16-bit basic timer):
+     *    APB1 timer clock = 240 MHz (D2PPRE1 = ÷2 → timer ×2)
+     *    PSC = 239 → 1 MHz → 1 µs per tick (max ARR 65535 → 65.5 ms)
+     *    ARR = total_us - 1
+     * ================================================================== */
+    uint32_t total_us = ((uint32_t)num_groups * SWITCH_ENABLE_TIME_US)
+                      + ((uint32_t)delay_ms * 1000U);
+    uint32_t arr_val  = total_us - 1U;
+    if (arr_val > 65535U) arr_val = 65535U;  /* Clamp to 16-bit max */
+
+    /* Start TIM6 — phase sync already confirmed */
+    LL_APB1_GRP1_EnableClock(LL_APB1_GRP1_PERIPH_TIM6);
+
+    LL_TIM_SetPrescaler(TIM6, 239U);        /* 240 MHz / 240 = 1 MHz = 1 µs */
+    LL_TIM_SetAutoReload(TIM6, arr_val);
+    LL_TIM_SetOnePulseMode(TIM6, LL_TIM_ONEPULSEMODE_SINGLE);
+    LL_TIM_GenerateEvent_UPDATE(TIM6);       /* Force PSC/ARR load */
+    LL_TIM_ClearFlag_UPDATE(TIM6);           /* Clear UIF from UG */
+    LL_TIM_EnableCounter(TIM6);              /* Start counting */
 
     /* Fire SET_LIST_OF_SW to each board — no response wait */
     for (uint8_t bid = 0U; bid < DC_MAX_BOARDS; bid++) {
@@ -818,7 +846,7 @@ void Command_ExecuteMeasureADC(void)
                            batch_buf[bid], batch_len[bid]);
     }
 
-    /* Spin until timer expires — PWM phase locks + switches enable during this window */
+    /* Spin until timer expires — switches enable during this window */
     while (!LL_TIM_IsActiveFlag_UPDATE(TIM6)) {
         /* Deterministic spin — no jitter from ISR latency */
     }
@@ -853,28 +881,21 @@ void Command_ExecuteMeasureADC(void)
     }
 
     /* ==================================================================
-     *  Drain stale Phase 3+4 responses
+     *  Drain stale Phase 4 responses
      *
-     *  Fire-and-forget commands sent: PWMPhaseSync + SET_LIST_OF_SW.
-     *  Each produces a response that may be queued in dc_response.
-     *  Drain them all before Phase 6 restore begins.
+     *  SET_LIST_OF_SW was fire-and-forget.  Its response may be queued
+     *  in dc_response.  Drain before Phase 6 restore begins.
+     *  (PWMPhaseSync responses were already consumed in Phase 3.)
      * ================================================================== */
-    {
-        /* Count how many fire-and-forget commands were sent */
-        uint8_t pending_responses = 0U;
-        for (uint8_t bid = 0U; bid < DC_MAX_BOARDS; bid++) {
-            if (!save_valid[bid]) continue;
-            if (board_needs_sync[bid]) pending_responses += 1U; /* PWMPhaseSync */
-            if (batch_len[bid] > 0U)   pending_responses += 1U; /* SET_LIST_OF_SW */
-        }
+    for (uint8_t bid = 0U; bid < DC_MAX_BOARDS; bid++) {
+        if (batch_len[bid] == 0U) continue;
+        if (!save_valid[bid]) continue;
 
-        for (uint8_t r = 0U; r < pending_responses; r++) {
-            uint32_t t0 = LL_GetTick();
-            while (!dc_response.ready) {
-                if ((LL_GetTick() - t0) >= DC_LIST_TIMEOUT) break;
-            }
-            dc_response.ready = false;
+        uint32_t t0 = LL_GetTick();
+        while (!dc_response.ready) {
+            if ((LL_GetTick() - t0) >= DC_LIST_TIMEOUT) break;
         }
+        dc_response.ready = false;
     }
 
     /* ==================================================================

@@ -138,12 +138,13 @@ Minimum payload: 7 bytes (2-byte delay + one 5-byte switch group).
 2. **Main loop stage** (`Command_ExecuteMeasureADC`): Executes the 7-phase blocking sequence:
    - Phase 1: GET_ALL_SW (0x0B53) on ALL 4 boards → save 600-byte state arrays
    - Phase 2: AllGND (0x0A02) on ALL 4 boards (clean measurement baseline)
-   - Phase 3+4: Start TIM6, THEN fire PWMPhaseSync (0x0A81, resets TIM2/TIM1/TIM8 counters on driver board) + SET_LIST_OF_SW (all fire-and-forget). Timer = `PWM_PHASE_SYNC_TIME_US + (num_switches × SWITCH_ENABLE_TIME_US) + user_delay`. PSC=2399 → 10 µs ticks, max 655 ms.
+   - Phase 3: Send PWMPhaseSync (0x0A81) and wait for response — confirms TIM2/TIM1/TIM8 counters reset to zero on driver board
+   - Phase 4: Start TIM6 (now locked to actual PWM reset), then fire SET_LIST_OF_SW (fire-and-forget). Timer = `(num_switches × SWITCH_ENABLE_TIME_US) + user_delay`. PSC=239 → 1 µs ticks, max 65.5 ms.
    - Phase 5: 100× SPI_LTC2338_Read burst (~300 µs)
    - Phase 6: AllGND + SET_LIST_OF_SW restore (only non-GND switches replayed)
    - Phase 7: Vpp calculation → response via `tx_request`
 
-**Deterministic timing:** The hardware timer (TIM6) starts BEFORE any commands are sent. The sequence within the timer window is: PWMPhaseSync (resets TIM2/TIM1/TIM8 counters to zero on the driver board, locking AC waveform phase) → SET_LIST_OF_SW (enables electrodes). The timer value includes phase sync time + switch enable time (`SWITCH_ENABLE_TIME_US` × number of switches) + user settling delay. The ADC burst fires at a fixed offset from the timer start, and because the PWM phase is reset within the same timer window, the waveform is sampled at a deterministic phase. Resolution is 10 µs.
+**Deterministic timing:** PWMPhaseSync is sent and the motherboard waits for the response, confirming the driver board's TIM2/TIM1/TIM8 counters are reset to zero. TIM6 starts AFTER this confirmation, so it is locked to the actual PWM counter reset (offset is the constant UART response transit time). SET_LIST_OF_SW is then sent fire-and-forget within the timer window. The ADC burst fires at a fixed offset from the confirmed phase reset. Resolution is 1 µs.
 
 **Error handling:** If GET_ALL_SW fails (Phase 1 timeout), that board is skipped in all subsequent phases. Phase 3 is fire-and-forget (no response wait). If Phase 2/6 timeout, the ADC measurement still completes but the response status indicates `STATUS_ADC_RESTORE_FAIL`.
 
@@ -155,7 +156,7 @@ Minimum payload: 7 bytes (2-byte delay + one 5-byte switch group).
 #define MEASURE_ADC_DELAY_MAX_MS    100U    /* Maximum delay */
 #define MEASURE_ADC_SW_STATES       600U    /* States per board (2×300) */
 #define SWITCH_ENABLE_TIME_US       3000U   /* ~3 ms per switch (calibrate on scope) */
-#define PWM_PHASE_SYNC_TIME_US      2000U   /* ~2 ms for phase sync command */
+/* PWMPhaseSync (0x0A81) — response-wait, not included in timer */
 #define ADC_FULL_SCALE_V            20.48f    /* ±10.24V bipolar span */
 #define ADC_FULL_SCALE_CODES        262144.0f /* 2^18 total codes */
 ```
