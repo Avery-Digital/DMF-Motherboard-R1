@@ -735,14 +735,27 @@ void Command_ExecuteMeasureADC(void)
     }
 
     /* ==================================================================
-     *  PHASE 3: Enable measurement switches (SET_LIST_OF_SW, batched)
+     *  PHASE 3+4: PWM phase sync + switch enable under deterministic timer
      *
-     *  Only the switches specified in the command payload are enabled.
-     *  All other switches remain at GND from Phase 2.
+     *  1. Bucket switch groups by boardID, track which boards need sync
+     *  2. Start TIM6 (phase sync + switch enable + user delay)
+     *  3. Fire PWMPhaseSync (0x0A81) to each board — resets TIM2/TIM1/TIM8
+     *  4. Fire SET_LIST_OF_SW per board
+     *  5. Spin on TIM6 UIF → ADC burst
+     *
+     *  Timer value = PWM_PHASE_SYNC_TIME_US
+     *              + (num_switches × SWITCH_ENABLE_TIME_US)
+     *              + (delay_ms × 1000)
+     *
+     *  TIM6 configuration (16-bit basic timer):
+     *    APB1 timer clock = 240 MHz (D2PPRE1 = ÷2 → timer ×2)
+     *    PSC = 2399 → 100 kHz → 10 µs per tick (max ARR 65535 → 655 ms)
+     *    ARR = total_us / 10 - 1
      * ================================================================== */
     /* Bucket groups by boardID */
     static uint8_t batch_buf[DC_MAX_BOARDS][PKT_MAX_PAYLOAD];
     uint16_t batch_len[DC_MAX_BOARDS] = {0};
+    bool board_needs_sync[DC_MAX_BOARDS] = {false};
 
     for (uint16_t g = 0U; g < num_groups; g++) {
         const uint8_t *group = &sw_data[g * group_size];
@@ -753,52 +766,59 @@ void Command_ExecuteMeasureADC(void)
                 memcpy(&batch_buf[bid][len], group, group_size);
                 batch_len[bid] += group_size;
             }
+            board_needs_sync[bid] = true;
         }
     }
 
+    /* Compute total timer value: phase sync + switch enable + settling */
+    uint32_t total_us = PWM_PHASE_SYNC_TIME_US
+                      + ((uint32_t)num_groups * SWITCH_ENABLE_TIME_US)
+                      + ((uint32_t)delay_ms * 1000U);
+    uint32_t arr_val  = (total_us / 10U) - 1U;
+    if (arr_val > 65535U) arr_val = 65535U;  /* Clamp to 16-bit max */
+
+    /* Start TIM6 BEFORE sending any commands */
+    LL_APB1_GRP1_EnableClock(LL_APB1_GRP1_PERIPH_TIM6);
+
+    LL_TIM_SetPrescaler(TIM6, 2399U);       /* 240 MHz / 2400 = 100 kHz = 10 µs */
+    LL_TIM_SetAutoReload(TIM6, arr_val);
+    LL_TIM_SetOnePulseMode(TIM6, LL_TIM_ONEPULSEMODE_SINGLE);
+    LL_TIM_GenerateEvent_UPDATE(TIM6);       /* Force PSC/ARR load */
+    LL_TIM_ClearFlag_UPDATE(TIM6);           /* Clear UIF from UG */
+    LL_TIM_EnableCounter(TIM6);              /* Start counting */
+
+    /* Fire PWMPhaseSync (0x0A81) to each board — resets PWM counters to zero */
     for (uint8_t bid = 0U; bid < DC_MAX_BOARDS; bid++) {
-        if (batch_len[bid] == 0U) continue;
-        if (!save_valid[bid]) continue;  /* Board not connected */
+        if (!board_needs_sync[bid]) continue;
+        if (!save_valid[bid]) continue;
 
         DC_Uart_Handle *dc = DC_GetHandle(bid);
         if (dc == NULL) continue;
 
-        dc_response.ready = false;
+        uint8_t sync_payload[1] = { bid };
+        DC_Uart_SendPacket(dc,
+                           measure_adc_request.msg1,
+                           measure_adc_request.msg2,
+                           0x0AU, 0x81U,  /* PWMPhaseSync */
+                           sync_payload, 1U);
+    }
+
+    /* Fire SET_LIST_OF_SW to each board — no response wait */
+    for (uint8_t bid = 0U; bid < DC_MAX_BOARDS; bid++) {
+        if (batch_len[bid] == 0U) continue;
+        if (!save_valid[bid]) continue;
+
+        DC_Uart_Handle *dc = DC_GetHandle(bid);
+        if (dc == NULL) continue;
 
         DC_Uart_SendPacket(dc,
                            measure_adc_request.msg1,
                            measure_adc_request.msg2,
                            0x0BU, 0x51U,  /* SET_LIST_OF_SW */
                            batch_buf[bid], batch_len[bid]);
-
-        uint32_t t0 = LL_GetTick();
-        while (!dc_response.ready) {
-            if ((LL_GetTick() - t0) >= DC_LIST_TIMEOUT) break;
-        }
-
-        if (dc_response.ready) {
-            dc_response.ready = false;
-        } else {
-            error_occurred = true;
-        }
     }
 
-    /* ==================================================================
-     *  PHASE 4: Deterministic wait — TIM6 one-pulse, 1 µs resolution
-     *
-     *  APB1 timer clock = 240 MHz (D2PPRE1 = ÷2 → timer ×2)
-     *  PSC = 239 → 1 MHz → 1 µs per tick
-     *  ARR = (delay_ms × 1000) - 1
-     * ================================================================== */
-    LL_APB1_GRP1_EnableClock(LL_APB1_GRP1_PERIPH_TIM6);
-
-    LL_TIM_SetPrescaler(TIM6, 239U);
-    LL_TIM_SetAutoReload(TIM6, ((uint32_t)delay_ms * 1000U) - 1U);
-    LL_TIM_SetOnePulseMode(TIM6, LL_TIM_ONEPULSEMODE_SINGLE);
-    LL_TIM_GenerateEvent_UPDATE(TIM6);   /* Force PSC/ARR load */
-    LL_TIM_ClearFlag_UPDATE(TIM6);       /* Clear UIF from UG */
-    LL_TIM_EnableCounter(TIM6);          /* Start counting */
-
+    /* Spin until timer expires — PWM phase locks + switches enable during this window */
     while (!LL_TIM_IsActiveFlag_UPDATE(TIM6)) {
         /* Deterministic spin — no jitter from ISR latency */
     }
@@ -829,6 +849,31 @@ void Command_ExecuteMeasureADC(void)
             meas_burst_payload[offset + 1U] = 0xFFU;
             meas_burst_payload[offset + 2U] = 0xFFU;
             meas_burst_payload[offset + 3U] = 0xFFU;
+        }
+    }
+
+    /* ==================================================================
+     *  Drain stale Phase 3+4 responses
+     *
+     *  Fire-and-forget commands sent: PWMPhaseSync + SET_LIST_OF_SW.
+     *  Each produces a response that may be queued in dc_response.
+     *  Drain them all before Phase 6 restore begins.
+     * ================================================================== */
+    {
+        /* Count how many fire-and-forget commands were sent */
+        uint8_t pending_responses = 0U;
+        for (uint8_t bid = 0U; bid < DC_MAX_BOARDS; bid++) {
+            if (!save_valid[bid]) continue;
+            if (board_needs_sync[bid]) pending_responses += 1U; /* PWMPhaseSync */
+            if (batch_len[bid] > 0U)   pending_responses += 1U; /* SET_LIST_OF_SW */
+        }
+
+        for (uint8_t r = 0U; r < pending_responses; r++) {
+            uint32_t t0 = LL_GetTick();
+            while (!dc_response.ready) {
+                if ((LL_GetTick() - t0) >= DC_LIST_TIMEOUT) break;
+            }
+            dc_response.ready = false;
         }
     }
 

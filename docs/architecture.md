@@ -290,15 +290,15 @@ Command_ExecuteMeasureADC()          ← main loop context (blocking)
     │     DC_Uart_SendPacket(AllGND 0x0A02)
     │     Poll dc_response.ready
     │
-    │ Phase 3: Enable measurement switches
+    │ Phase 3+4: PWM phase sync + timer-first switch enable
     │   Bucket switch groups by boardID
+    │   total_us = PWM_PHASE_SYNC + num_switches × 3000 + delay_ms × 1000
+    │   START TIM6 (PSC=2399, 10 µs tick, ARR=total_us/10-1)
+    │   for each board with switches:
+    │     DC_Uart_SendPacket(PWMPhaseSync 0x0A81)  ← resets TIM2/1/8 counters
     │   for each non-empty board:
-    │     DC_Uart_SendPacket(SET_LIST_OF_SW 0x0B51)
-    │     Poll dc_response.ready
-    │
-    │ Phase 4: Deterministic wait (TIM6 one-pulse)
-    │   TIM6 PSC=239 (1 µs tick), ARR=delay_ms×1000-1
-    │   Enable counter → poll UIF flag → stop
+    │     DC_Uart_SendPacket(SET_LIST_OF_SW 0x0B51)  ← fire-and-forget
+    │   Poll TIM6 UIF flag → stop
     │
     │ Phase 5: Burst ADC read (100 samples)
     │   for i = 0..99:

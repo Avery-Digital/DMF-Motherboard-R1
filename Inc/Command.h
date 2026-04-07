@@ -195,6 +195,15 @@ extern "C" {
 #define MEASURE_ADC_DELAY_HDR_SIZE 2U     /**< Delay header: 2 bytes (uint16 LE) */
 #define MEASURE_ADC_SW_STATES      600U   /**< Switch states per board (2 banks × 300) */
 
+/* Estimated time for one switch to physically latch on the driver board.
+ * Covers UART byte time + driver board processing + EHVSBlockProgram.
+ * Calibrate on scope if needed. */
+#define SWITCH_ENABLE_TIME_US      3000U  /**< ~3 ms per switch (conservative)  */
+
+/* Estimated time for PWM phase sync on the driver board.
+ * Covers 1× UART packet + 3 register writes (sub-µs).  Calibrate on scope. */
+#define PWM_PHASE_SYNC_TIME_US     2000U  /**< ~2 ms for sync cmd (conservative) */
+
 /* LTC2338-18 bipolar mode: ±10.24 V full-scale, 18-bit two's complement.
  * LSB = 20.48 / 262144 = 78.125 µV.  Matches GUI PlotBurstADC scaling. */
 #define ADC_FULL_SCALE_V        20.48f    /**< Full bipolar span (±10.24 V)    */
