@@ -39,7 +39,7 @@ extern "C" {
 
 /* Firmware version */
 #define FW_VERSION_MAJOR    1U
-#define FW_VERSION_MINOR    1U
+#define FW_VERSION_MINOR    2U
 #define FW_VERSION_PATCH    0U
 #define CMD_READ_ADC        CMD_CODE(0x0C, 0x01)    /**< Read LTC2338-18 ADC     */
 #define CMD_BURST_ADC       CMD_CODE(0x0C, 0x02)    /**< Burst 100x ADC reads    */
@@ -136,6 +136,15 @@ extern "C" {
 /* Driverboard SET_LIST group size */
 #define DC_SET_GROUP_SIZE   5U      /**< [boardID][bank][SW_hi][SW_lo][state] */
 #define DC_GET_GROUP_SIZE   4U      /**< [boardID][bank][SW_hi][SW_lo]        */
+
+/* Switch state encoding (matches driver board EHVSDriver.h) */
+#define SW_STATE_GND        0x00U   /**< Switch connected to ground           */
+#define SW_STATE_HVSG       0x01U   /**< Switch connected to HVSG             */
+#define SW_STATE_FLOAT      0x04U   /**< Switch floating (disconnected)       */
+
+/* GET_HVSG_SWITCHES command bytes (new optimized save command) */
+#define CMD_GET_HVSG_SW_CMD1    0x0BU
+#define CMD_GET_HVSG_SW_CMD2    0x54U
 
 /* ========================= Response Status Codes ========================== *
  *

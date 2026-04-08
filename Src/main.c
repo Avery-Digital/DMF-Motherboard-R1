@@ -634,6 +634,9 @@ void Command_ExecuteDcList(void)
  * ========================================================================== */
 void Command_ExecuteMeasureADC(void)
 {
+    /* ---- Elapsed time tracking ---- */
+    uint32_t t_start = LL_GetTick();
+
     const uint8_t *sw_data    = measure_adc_request.sw_payload;
     const uint16_t sw_len     = measure_adc_request.sw_length;
     const uint16_t delay_ms   = measure_adc_request.delay_ms;
@@ -652,8 +655,9 @@ void Command_ExecuteMeasureADC(void)
         return;
     }
 
-    /* ---- Static buffers for save/restore ---- */
-    static uint8_t save_buf[DC_MAX_BOARDS][MEASURE_ADC_SW_STATES];
+    /* ---- Static buffers ---- */
+    static uint8_t save_buf[DC_MAX_BOARDS][PKT_MAX_PAYLOAD]; /* HVSG switch triplets */
+    uint16_t save_len[DC_MAX_BOARDS] = {0};
     bool     save_valid[DC_MAX_BOARDS] = {false};
     bool     error_occurred = false;
 
@@ -661,12 +665,11 @@ void Command_ExecuteMeasureADC(void)
     dc_list_active = true;
 
     /* ==================================================================
-     *  PHASE 1: Save current switch states on connected boards (GET_ALL_SW)
+     *  PHASE 1: Save HVSG switch list from connected boards
      *
-     *  Try every board — boards that don't respond (timeout) are marked
-     *  save_valid[bid] = false and skipped in all subsequent phases.
-     *  This allows the measurement to proceed even if no driver boards
-     *  are plugged in.
+     *  Uses GET_HVSG_SWITCHES (0x0B54) — returns only the switches set
+     *  to HVSG as [bank][SW_hi][SW_lo] triplets.  Much smaller than
+     *  GET_ALL_SW (603 bytes → typically < 50 bytes).
      * ================================================================== */
     for (uint8_t bid = 0U; bid < DC_MAX_BOARDS; bid++) {
         DC_Uart_Handle *dc = DC_GetHandle(bid);
@@ -674,13 +677,12 @@ void Command_ExecuteMeasureADC(void)
 
         dc_response.ready = false;
 
-        /* GET_ALL_SW (0x0B53), payload = [boardID] */
-        uint8_t get_all_payload[1] = { bid };
+        uint8_t get_payload[1] = { bid };
         DC_Uart_SendPacket(dc,
                            measure_adc_request.msg1,
                            measure_adc_request.msg2,
-                           0x0BU, 0x53U,
-                           get_all_payload, 1U);
+                           CMD_GET_HVSG_SW_CMD1, CMD_GET_HVSG_SW_CMD2,
+                           get_payload, 1U);
 
         uint32_t t0 = LL_GetTick();
         while (!dc_response.ready) {
@@ -688,69 +690,65 @@ void Command_ExecuteMeasureADC(void)
         }
 
         if (dc_response.ready) {
-            /* Response: [status1][status2][boardID][600 bytes switch states]
-             * Copy the 600 switch state bytes (skip 3-byte header) */
-            if (dc_response.length >= (3U + MEASURE_ADC_SW_STATES)) {
-                memcpy(save_buf[bid], &dc_response.payload[3],
-                       MEASURE_ADC_SW_STATES);
-                save_valid[bid] = true;
+            /* Response: [status1][status2][boardID][triplets...]
+             * Copy triplets (skip 3-byte header) */
+            if (dc_response.length > 3U) {
+                uint16_t data_len = dc_response.length - 3U;
+                if (data_len > PKT_MAX_PAYLOAD) data_len = PKT_MAX_PAYLOAD;
+                memcpy(save_buf[bid], &dc_response.payload[3], data_len);
+                save_len[bid] = data_len;
             }
+            save_valid[bid] = true;
             dc_response.ready = false;
-        }
-        /* Timeout = board not connected, save_valid stays false — skip it */
-    }
-
-    /* Abort if no boards responded — measurement cannot proceed */
-    {
-        bool any_valid = false;
-        for (uint8_t bid = 0U; bid < DC_MAX_BOARDS; bid++) {
-            if (save_valid[bid]) { any_valid = true; break; }
-        }
-        if (!any_valid) {
-            dc_list_active = false;
-            tx_request.msg1    = measure_adc_request.msg1;
-            tx_request.msg2    = measure_adc_request.msg2;
-            tx_request.cmd1    = measure_adc_request.cmd1;
-            tx_request.cmd2    = measure_adc_request.cmd2;
-            tx_request.payload[0] = STATUS_CAT_ADC;
-            tx_request.payload[1] = STATUS_ADC_RESTORE_FAIL;
-            tx_request.length  = 2U;
-            tx_request.pending = true;
-            return;
         }
     }
 
     /* ==================================================================
-     *  PHASE 2: Set connected boards to GND (AllGND / 0x0A02)
+     *  PHASE 2: Selectively GND only the HVSG switches
      *
-     *  Only boards that responded in Phase 1 are grounded.
-     *  Boards that didn't respond are skipped (not connected).
+     *  Instead of AllGND (all 600 switches), build SET_LIST_OF_SW from
+     *  the saved HVSG list, setting each to SW_STATE_GND.
      * ================================================================== */
     for (uint8_t bid = 0U; bid < DC_MAX_BOARDS; bid++) {
         if (!save_valid[bid]) continue;
+        if (save_len[bid] == 0U) continue;
 
         DC_Uart_Handle *dc = DC_GetHandle(bid);
         if (dc == NULL) continue;
 
-        dc_response.ready = false;
+        static uint8_t gnd_buf[PKT_MAX_PAYLOAD];
+        uint16_t gnd_len = 0U;
+        uint16_t num_entries = save_len[bid] / 3U;
 
-        /* AllGND (0x0A02), payload = [boardID] */
-        uint8_t gnd_payload[1] = { bid };
-        DC_Uart_SendPacket(dc,
-                           measure_adc_request.msg1,
-                           measure_adc_request.msg2,
-                           0x0AU, 0x02U,
-                           gnd_payload, 1U);
-
-        uint32_t t0 = LL_GetTick();
-        while (!dc_response.ready) {
-            if ((LL_GetTick() - t0) >= DC_LIST_TIMEOUT) break;
+        for (uint16_t e = 0U; e < num_entries; e++) {
+            if (gnd_len + 5U > PKT_MAX_PAYLOAD) break;
+            gnd_buf[gnd_len + 0U] = bid;
+            gnd_buf[gnd_len + 1U] = save_buf[bid][e * 3U + 0U];  /* bank */
+            gnd_buf[gnd_len + 2U] = save_buf[bid][e * 3U + 1U];  /* SW_hi */
+            gnd_buf[gnd_len + 3U] = save_buf[bid][e * 3U + 2U];  /* SW_lo */
+            gnd_buf[gnd_len + 4U] = SW_STATE_GND;
+            gnd_len += 5U;
         }
 
-        if (dc_response.ready) {
+        if (gnd_len > 0U) {
             dc_response.ready = false;
-        } else {
-            error_occurred = true;
+
+            DC_Uart_SendPacket(dc,
+                               measure_adc_request.msg1,
+                               measure_adc_request.msg2,
+                               0x0BU, 0x51U,  /* SET_LIST_OF_SW */
+                               gnd_buf, gnd_len);
+
+            uint32_t t0 = LL_GetTick();
+            while (!dc_response.ready) {
+                if ((LL_GetTick() - t0) >= DC_LIST_TIMEOUT) break;
+            }
+
+            if (dc_response.ready) {
+                dc_response.ready = false;
+            } else {
+                error_occurred = true;
+            }
         }
     }
 
@@ -758,12 +756,9 @@ void Command_ExecuteMeasureADC(void)
      *  PHASE 3: PWM phase sync — send and WAIT for response
      *
      *  The response confirms the driver board has reset TIM2/TIM1/TIM8
-     *  counters to zero.  TIM6 starts AFTER the response arrives so the
-     *  timer is locked to the actual counter reset, not to when we sent
-     *  the command.  The UART response transit time is constant (fixed
-     *  packet size, fixed baud rate), so the offset is deterministic.
+     *  counters to zero.  The deterministic timer starts AFTER the
+     *  response arrives.
      * ================================================================== */
-    /* Bucket groups by boardID */
     static uint8_t batch_buf[DC_MAX_BOARDS][PKT_MAX_PAYLOAD];
     uint16_t batch_len[DC_MAX_BOARDS] = {0};
     bool board_needs_sync[DC_MAX_BOARDS] = {false};
@@ -781,7 +776,6 @@ void Command_ExecuteMeasureADC(void)
         }
     }
 
-    /* Send PWMPhaseSync (0x0A81) to each board and wait for response */
     for (uint8_t bid = 0U; bid < DC_MAX_BOARDS; bid++) {
         if (!board_needs_sync[bid]) continue;
         if (!save_valid[bid]) continue;
@@ -806,30 +800,25 @@ void Command_ExecuteMeasureADC(void)
     }
 
     /* ==================================================================
-     *  PHASE 4: Start TIM6 AFTER phase sync confirmed, then fire switches
+     *  PHASE 4: Start TIM2 AFTER phase sync, then fire switches
      *
-     *  Timer is now locked to the actual PWM counter reset.
-     *  Timer value = (num_switches × SWITCH_ENABLE_TIME_US) + (delay_ms × 1000)
-     *
-     *  TIM6 configuration (16-bit basic timer):
+     *  TIM2 is a 32-bit timer with 100 ns resolution:
      *    APB1 timer clock = 240 MHz (D2PPRE1 = ÷2 → timer ×2)
-     *    PSC = 239 → 1 MHz → 1 µs per tick (max ARR 65535 → 65.5 ms)
-     *    ARR = total_us - 1
+     *    PSC = 23 → 10 MHz → 100 ns per tick
+     *    ARR = total_ticks - 1 (32-bit, max ~429 seconds)
      * ================================================================== */
     uint32_t total_us = ((uint32_t)num_groups * SWITCH_ENABLE_TIME_US)
                       + ((uint32_t)delay_ms * 1000U);
-    uint32_t arr_val  = total_us - 1U;
-    if (arr_val > 65535U) arr_val = 65535U;  /* Clamp to 16-bit max */
+    uint32_t arr_val  = (total_us * 10U) - 1U;  /* 100 ns ticks */
 
-    /* Start TIM6 — phase sync already confirmed */
-    LL_APB1_GRP1_EnableClock(LL_APB1_GRP1_PERIPH_TIM6);
+    LL_APB1_GRP1_EnableClock(LL_APB1_GRP1_PERIPH_TIM2);
 
-    LL_TIM_SetPrescaler(TIM6, 239U);        /* 240 MHz / 240 = 1 MHz = 1 µs */
-    LL_TIM_SetAutoReload(TIM6, arr_val);
-    LL_TIM_SetOnePulseMode(TIM6, LL_TIM_ONEPULSEMODE_SINGLE);
-    LL_TIM_GenerateEvent_UPDATE(TIM6);       /* Force PSC/ARR load */
-    LL_TIM_ClearFlag_UPDATE(TIM6);           /* Clear UIF from UG */
-    LL_TIM_EnableCounter(TIM6);              /* Start counting */
+    LL_TIM_SetPrescaler(TIM2, 23U);         /* 240 MHz / 24 = 10 MHz = 100 ns */
+    LL_TIM_SetAutoReload(TIM2, arr_val);
+    LL_TIM_SetOnePulseMode(TIM2, LL_TIM_ONEPULSEMODE_SINGLE);
+    LL_TIM_GenerateEvent_UPDATE(TIM2);       /* Force PSC/ARR load */
+    LL_TIM_ClearFlag_UPDATE(TIM2);           /* Clear UIF from UG */
+    LL_TIM_EnableCounter(TIM2);              /* Start counting */
 
     /* Fire SET_LIST_OF_SW to each board — no response wait */
     for (uint8_t bid = 0U; bid < DC_MAX_BOARDS; bid++) {
@@ -846,14 +835,14 @@ void Command_ExecuteMeasureADC(void)
                            batch_buf[bid], batch_len[bid]);
     }
 
-    /* Spin until timer expires — switches enable during this window */
-    while (!LL_TIM_IsActiveFlag_UPDATE(TIM6)) {
+    /* Spin until timer expires */
+    while (!LL_TIM_IsActiveFlag_UPDATE(TIM2)) {
         /* Deterministic spin — no jitter from ISR latency */
     }
 
-    LL_TIM_ClearFlag_UPDATE(TIM6);
-    LL_TIM_DisableCounter(TIM6);
-    LL_APB1_GRP1_DisableClock(LL_APB1_GRP1_PERIPH_TIM6);
+    LL_TIM_ClearFlag_UPDATE(TIM2);
+    LL_TIM_DisableCounter(TIM2);
+    LL_APB1_GRP1_DisableClock(LL_APB1_GRP1_PERIPH_TIM2);
 
     /* ==================================================================
      *  PHASE 5: Burst ADC read — 100 samples via SPI2
@@ -882,10 +871,6 @@ void Command_ExecuteMeasureADC(void)
 
     /* ==================================================================
      *  Drain stale Phase 4 responses
-     *
-     *  SET_LIST_OF_SW was fire-and-forget.  Its response may be queued
-     *  in dc_response.  Drain before Phase 6 restore begins.
-     *  (PWMPhaseSync responses were already consumed in Phase 3.)
      * ================================================================== */
     for (uint8_t bid = 0U; bid < DC_MAX_BOARDS; bid++) {
         if (batch_len[bid] == 0U) continue;
@@ -899,53 +884,31 @@ void Command_ExecuteMeasureADC(void)
     }
 
     /* ==================================================================
-     *  PHASE 6: Restore ALL 4 boards to their original switch states
+     *  PHASE 6: Restore HVSG switches from saved list
      *
-     *  For each board: AllGND first (clean slate), then replay non-GND
-     *  switches from the saved state via SET_LIST_OF_SW.
+     *  Build SET_LIST_OF_SW from saved HVSG triplets, setting each
+     *  back to SW_STATE_HVSG.  No AllGND needed — just restore the
+     *  specific switches that were changed.
      * ================================================================== */
     for (uint8_t bid = 0U; bid < DC_MAX_BOARDS; bid++) {
         if (!save_valid[bid]) continue;
+        if (save_len[bid] == 0U) continue;
 
         DC_Uart_Handle *dc = DC_GetHandle(bid);
         if (dc == NULL) continue;
 
-        /* First set AllGND to clear any measurement switches */
-        dc_response.ready = false;
-        uint8_t gnd_payload[1] = { bid };
-        DC_Uart_SendPacket(dc,
-                           measure_adc_request.msg1,
-                           measure_adc_request.msg2,
-                           0x0AU, 0x02U,
-                           gnd_payload, 1U);
-
-        uint32_t t0 = LL_GetTick();
-        while (!dc_response.ready) {
-            if ((LL_GetTick() - t0) >= DC_LIST_TIMEOUT) break;
-        }
-        dc_response.ready = false;
-
-        /* Build SET_LIST_OF_SW groups for non-GND switches.
-         * save_buf layout: [0..299] = bank 0, [300..599] = bank 1.
-         * Each byte: 0=Float, 1=HVSG, 2=GND.
-         * Group format: [boardID][bank][SW_hi][SW_lo][state] */
         static uint8_t restore_buf[PKT_MAX_PAYLOAD];
         uint16_t restore_len = 0U;
+        uint16_t num_entries = save_len[bid] / 3U;
 
-        for (uint16_t bank = 0U; bank < 2U; bank++) {
-            for (uint16_t sw = 0U; sw < 300U; sw++) {
-                uint8_t state = save_buf[bid][bank * 300U + sw];
-                if (state == 0x02U) continue;  /* GND — already set by AllGND */
-
-                if (restore_len + 5U > PKT_MAX_PAYLOAD) break;
-
-                restore_buf[restore_len + 0U] = bid;
-                restore_buf[restore_len + 1U] = (uint8_t)bank;
-                restore_buf[restore_len + 2U] = (uint8_t)(sw >> 8);
-                restore_buf[restore_len + 3U] = (uint8_t)(sw & 0xFFU);
-                restore_buf[restore_len + 4U] = state;
-                restore_len += 5U;
-            }
+        for (uint16_t e = 0U; e < num_entries; e++) {
+            if (restore_len + 5U > PKT_MAX_PAYLOAD) break;
+            restore_buf[restore_len + 0U] = bid;
+            restore_buf[restore_len + 1U] = save_buf[bid][e * 3U + 0U];  /* bank */
+            restore_buf[restore_len + 2U] = save_buf[bid][e * 3U + 1U];  /* SW_hi */
+            restore_buf[restore_len + 3U] = save_buf[bid][e * 3U + 2U];  /* SW_lo */
+            restore_buf[restore_len + 4U] = SW_STATE_HVSG;
+            restore_len += 5U;
         }
 
         if (restore_len > 0U) {
@@ -957,7 +920,7 @@ void Command_ExecuteMeasureADC(void)
                                0x0BU, 0x51U,  /* SET_LIST_OF_SW */
                                restore_buf, restore_len);
 
-            t0 = LL_GetTick();
+            uint32_t t0 = LL_GetTick();
             while (!dc_response.ready) {
                 if ((LL_GetTick() - t0) >= DC_LIST_TIMEOUT) break;
             }
@@ -969,19 +932,15 @@ void Command_ExecuteMeasureADC(void)
     dc_list_active = false;
 
     /* ==================================================================
-     *  PHASE 7: Calculate Vpp and build response
-     *
-     *  LTC2338-18 bipolar mode: ±10.24 V, 18-bit two's complement.
-     *  Bit 17 is sign bit.  Range: -131072 to +131071.
-     *  LSB = 20.48 / 262144 = 78.125 µV.
-     *  Matches GUI PlotBurstADC: lsbVolts = 20.48 / 262144.0
+     *  PHASE 7: Calculate Vpp, elapsed time, and build response
      * ================================================================== */
+    uint32_t elapsed_ms = LL_GetTick() - t_start;
+
     int32_t min_val = INT32_MAX;
     int32_t max_val = INT32_MIN;
 
     for (uint32_t i = 0U; i < ADC_BURST_COUNT; i++) {
         int32_t s = (int32_t)(meas_burst_raw[i] & 0x3FFFFU);
-        /* Sign-extend bit 17 */
         if (s & 0x20000) {
             s |= (int32_t)0xFFFC0000;
         }
@@ -992,8 +951,8 @@ void Command_ExecuteMeasureADC(void)
     float vpp = (float)(max_val - min_val)
               * (ADC_FULL_SCALE_V / ADC_FULL_SCALE_CODES);
 
-    /* Response: [status1][status2][Vpp float LE (4B)][burst data (400B)]
-     * Total: 406 bytes */
+    /* Response: [s1][s2][Vpp float LE (4B)][elapsed_ms uint32 LE (4B)][burst (400B)]
+     * Total: 410 bytes */
     tx_request.msg1   = measure_adc_request.msg1;
     tx_request.msg2   = measure_adc_request.msg2;
     tx_request.cmd1   = measure_adc_request.cmd1;
@@ -1002,8 +961,12 @@ void Command_ExecuteMeasureADC(void)
     tx_request.payload[0] = error_occurred ? STATUS_CAT_ADC : STATUS_CAT_OK;
     tx_request.payload[1] = error_occurred ? STATUS_ADC_RESTORE_FAIL : STATUS_CODE_OK;
     memcpy(&tx_request.payload[2], &vpp, sizeof(float));
-    memcpy(&tx_request.payload[6], meas_burst_payload, ADC_BURST_PAYLOAD_SIZE);
-    tx_request.length  = 2U + 4U + ADC_BURST_PAYLOAD_SIZE;  /* 406 bytes */
+    tx_request.payload[6] = (uint8_t)(elapsed_ms & 0xFFU);
+    tx_request.payload[7] = (uint8_t)((elapsed_ms >> 8) & 0xFFU);
+    tx_request.payload[8] = (uint8_t)((elapsed_ms >> 16) & 0xFFU);
+    tx_request.payload[9] = (uint8_t)((elapsed_ms >> 24) & 0xFFU);
+    memcpy(&tx_request.payload[10], meas_burst_payload, ADC_BURST_PAYLOAD_SIZE);
+    tx_request.length  = 2U + 4U + 4U + ADC_BURST_PAYLOAD_SIZE;  /* 410 bytes */
     tx_request.pending = true;
 }
 

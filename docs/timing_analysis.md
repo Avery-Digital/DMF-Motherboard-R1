@@ -1,8 +1,14 @@
 # Timing Analysis — CMD_MEASURE_ADC and Driver Board Communication
 
-## UART Byte Stuffing Impact on Switch Data
+## v1.2.0 Optimization Note
 
-Switch states use values that collide with protocol framing bytes:
+As of v1.2.0, switch state values have been remapped: GND=0x00, HVSG=0x01, Float=0x04. The SOF collision (GND was 0x02) is eliminated — GET_ALL_SW is now ~55 ms regardless of switch state. CMD_MEASURE_ADC now uses GET_HVSG_SWITCHES (0x0B54) instead of GET_ALL_SW, selective GND instead of AllGND, and TIM2 (100 ns) instead of TIM6 (1 µs).
+
+---
+
+## UART Byte Stuffing Impact on Switch Data (Pre-v1.2.0)
+
+Switch states previously used values that collided with protocol framing bytes:
 - `0x00` = Float — **no escape**
 - `0x01` = HVSG — **no escape**
 - `0x02` = GND — **ESCAPES to 2 bytes** (0x02 = SOF, escaped as `[0x2D][0x2F]`)

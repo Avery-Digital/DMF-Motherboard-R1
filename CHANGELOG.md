@@ -1,5 +1,31 @@
 # Changelog
 
+## v1.2.0 — 2026-04-08
+
+### CMD_MEASURE_ADC Optimization
+- **Phase 1**: Replaced GET_ALL_SW (0x0B53, 603-byte response) with GET_HVSG_SWITCHES (0x0B54) — returns only HVSG switch triplets. Typical response: ~10-50 bytes instead of 603+.
+- **Phase 2**: Selective GND — only sets HVSG switches to GND via SET_LIST_OF_SW instead of AllGND on all 600 switches. Saves ~14 ms per board.
+- **Phase 4**: Upgraded timer from TIM6 (16-bit, 1 µs resolution) to TIM2 (32-bit, 100 ns resolution, PSC=23 → 10 MHz tick). Max period ~429 seconds.
+- **Phase 6**: Restores only saved HVSG switches. No AllGND clean-slate needed.
+- **Elapsed timestamp**: Response now includes `elapsed_ms` (uint32 LE) measuring total firmware execution time from command entry to response build.
+
+### Switch State Remapping (Breaking)
+- GND: 0x02 → 0x00 (eliminates SOF byte stuffing — GET_ALL_SW now ~55 ms regardless of state)
+- Float: 0x00 → 0x04
+- HVSG: unchanged (0x01)
+- Added named constants: `SW_STATE_GND`, `SW_STATE_HVSG`, `SW_STATE_FLOAT`
+- New driver board command constant: `CMD_GET_HVSG_SW_CMD1/CMD2` (0x0B54)
+
+### Response Format Change (CMD_MEASURE_ADC)
+- Old: `[s1][s2][Vpp(4B)][samples(400B)]` = 406 bytes
+- New: `[s1][s2][Vpp(4B)][elapsed_ms(4B)][samples(400B)]` = 410 bytes
+
+### Expected Performance
+- 1 board, 10 HVSG switches, 10 ms delay: ~233 ms → ~98 ms (58% faster)
+- Primary savings from eliminating 600-byte GET_ALL_SW and full-board AllGND
+
+---
+
 ## v1.1.0 — 2026-04-05
 
 ### New Command: CMD_MEASURE_ADC (0x0C03)
