@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.3.1 — 2026-04-09
+
+### Hardware GPIO PWM Phase Sync
+- **Replaced UART PWMPhaseSync (0x0A81) with hardware GPIO pulse** in CMD_MEASURE_ADC Phase 3
+- PA12 (pin 131) → Connector 1 → boards 0+1 (PD3 on driver board)
+- PC5 (pin 54) → Connector 2 → boards 2+3 (PD3 on driver board)
+- Rising edge triggers EXTI3 on driver boards, resetting TIM2/TIM1/TIM8 counters
+- Sub-microsecond sync across all boards (was ~2 ms per board via UART)
+- Both connectors pulsed back-to-back — ~10 ns gap at 480 MHz, negligible at 10 kHz PWM
+- `PWM_SyncPulse()` function added to main.c, sync GPIO pins in Bsp.c
+
+---
+
 ## v1.3.0 — 2026-04-08
 
 ### CMD_MEASURE_ADC — Board Mask, Phase Timing, Timeout Tuning

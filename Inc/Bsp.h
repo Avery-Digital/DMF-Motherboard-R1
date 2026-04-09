@@ -559,6 +559,13 @@ extern const USART_Config       act2_uart_cfg;
 extern const DMA_ChannelConfig  act2_dma_rx_cfg;    /* DMA1 Stream 7 */
 extern Act_Uart_Handle          act2_handle;
 
+/* PWM Phase Sync GPIO — hardware sync for driver board AC waveforms
+ *   Connector 1 (boards 0+1): PA12 (Pin 131) → driver board PD3
+ *   Connector 2 (boards 2+3): PC5  (Pin 54)  → driver board PD3
+ *   Idle LOW, pulse HIGH to sync.  Rising edge resets PWM timers. */
+extern const PinConfig          pwm_sync_con1_pin;  /* PA12 — boards 0+1 */
+extern const PinConfig          pwm_sync_con2_pin;  /* PC5  — boards 2+3 */
+
 /* RS485 — USART7 + MAX485 for gantry communication
  *   TX  : PF7  (Pin 27, USART7_TX, AF7)
  *   RX  : PF6  (Pin 26, USART7_RX, AF7)

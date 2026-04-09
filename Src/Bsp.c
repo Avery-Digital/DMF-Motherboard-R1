@@ -906,6 +906,39 @@ Act_Uart_Handle act2_handle = {
  *    CFG_SEL1 = PG1 (Pin 66) driven LOW = 0
  *    CFG_SEL2 = PG0 (Pin 63) driven LOW = 0
  * ========================================================================== */
+/* ==========================================================================
+ *  PWM PHASE SYNC GPIO — HARDWARE AC WAVEFORM SYNC
+ *
+ *  Rising edge on these pins resets TIM1/TIM8/TIM2 counters on the
+ *  driver boards, synchronising the 10 kHz AC waveform across all boards.
+ *
+ *  PA12 (Pin 131) → Connector 1 → boards 0 & 1 (PD3 on driver board)
+ *  PC5  (Pin 54)  → Connector 2 → boards 2 & 3 (PD3 on driver board)
+ *
+ *  Idle LOW, pulse HIGH to sync.
+ * ========================================================================== */
+const PinConfig pwm_sync_con1_pin = {
+    .clk    = LL_AHB4_GRP1_PERIPH_GPIOA,
+    .port   = GPIOA,
+    .pin    = LL_GPIO_PIN_12,
+    .mode   = LL_GPIO_MODE_OUTPUT,
+    .af     = 0U,
+    .speed  = LL_GPIO_SPEED_FREQ_VERY_HIGH,
+    .pull   = LL_GPIO_PULL_DOWN,
+    .output = LL_GPIO_OUTPUT_PUSHPULL,
+};
+
+const PinConfig pwm_sync_con2_pin = {
+    .clk    = LL_AHB4_GRP1_PERIPH_GPIOC,
+    .port   = GPIOC,
+    .pin    = LL_GPIO_PIN_5,
+    .mode   = LL_GPIO_MODE_OUTPUT,
+    .af     = 0U,
+    .speed  = LL_GPIO_SPEED_FREQ_VERY_HIGH,
+    .pull   = LL_GPIO_PULL_DOWN,
+    .output = LL_GPIO_OUTPUT_PUSHPULL,
+};
+
 const PinConfig usb2517_reset_n_pin = {
     .clk        = LL_AHB4_GRP1_PERIPH_GPIOC,
     .port       = GPIOC,

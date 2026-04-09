@@ -123,6 +123,35 @@ static Act_Uart_Handle* ACT_GetHandle(uint8_t board_id)
     return act_handles[board_id];
 }
 
+/* ========================= PWM Phase Sync ================================= */
+
+/**
+ * @brief  Pulse both sync GPIOs HIGH then LOW to reset PWM timers on
+ *         all connected driver boards.  Rising edge triggers EXTI on
+ *         driver board PD3, which resets TIM2/TIM1/TIM8 counters.
+ *
+ *         Both connectors are pulsed back-to-back — at 480 MHz the
+ *         gap between them is ~10 ns, negligible at 10 kHz PWM.
+ *
+ *         Pulse width: ~100 ns (a few NOPs for reliable edge detection).
+ */
+void PWM_SyncPulse(void)
+{
+    /* Assert HIGH on both sync lines simultaneously */
+    LL_GPIO_SetOutputPin(pwm_sync_con1_pin.port, pwm_sync_con1_pin.pin);
+    LL_GPIO_SetOutputPin(pwm_sync_con2_pin.port, pwm_sync_con2_pin.pin);
+
+    /* Brief pulse — ~100 ns at 480 MHz */
+    __NOP(); __NOP(); __NOP(); __NOP();
+    __NOP(); __NOP(); __NOP(); __NOP();
+    __NOP(); __NOP(); __NOP(); __NOP();
+    __NOP(); __NOP(); __NOP(); __NOP();
+
+    /* De-assert — return to idle LOW */
+    LL_GPIO_ResetOutputPin(pwm_sync_con1_pin.port, pwm_sync_con1_pin.pin);
+    LL_GPIO_ResetOutputPin(pwm_sync_con2_pin.port, pwm_sync_con2_pin.pin);
+}
+
 /* Private function prototypes -----------------------------------------------*/
 static void SystemInit_Sequence(void);
 static void OnPacketReceived(const PacketHeader *header,
@@ -307,6 +336,12 @@ static void SystemInit_Sequence(void)
     if (lsw_result != LOADSW_OK) {
         Error_Handler(0x60);
     }
+
+    /* Step 6c: PWM sync GPIO — idle LOW, ready for rising-edge pulse */
+    Pin_Init(&pwm_sync_con1_pin);
+    LL_GPIO_ResetOutputPin(pwm_sync_con1_pin.port, pwm_sync_con1_pin.pin);
+    Pin_Init(&pwm_sync_con2_pin);
+    LL_GPIO_ResetOutputPin(pwm_sync_con2_pin.port, pwm_sync_con2_pin.pin);
 
     /* Step 7: USB2517I hub — reset and strap for internal default mode.
      *         CFG_SEL[2:1:0] = 1,0,1 → internal defaults, dynamic power, LED=USB.
@@ -764,18 +799,19 @@ void Command_ExecuteMeasureADC(void)
     phase_ms[1] = (uint16_t)(LL_GetTick() - phase_start);
 
     /* ==================================================================
-     *  PHASE 3: PWM phase sync — send and WAIT for response
+     *  PHASE 3: PWM phase sync — GPIO hardware pulse
      *
-     *  The response confirms the driver board has reset TIM2/TIM1/TIM8
-     *  counters to zero.  The deterministic timer starts AFTER the
-     *  response arrives.  Uses DC_RESPONSE_TIMEOUT (10 ms) since
-     *  PWMPhaseSync responds in ~1-2 ms.
+     *  Rising edge on PA12 (connector 1, boards 0+1) and PC5
+     *  (connector 2, boards 2+3) triggers EXTI3 on each driver board's
+     *  PD3, which resets TIM2/TIM1/TIM8 counters to zero.
+     *
+     *  Sub-microsecond sync — no UART round-trip needed.
      * ================================================================== */
     phase_start = LL_GetTick();
 
+    /* Build switch batch buffers (needed by Phase 4) */
     static uint8_t batch_buf[DC_MAX_BOARDS][PKT_MAX_PAYLOAD];
     uint16_t batch_len[DC_MAX_BOARDS] = {0};
-    bool board_needs_sync[DC_MAX_BOARDS] = {false};
 
     for (uint16_t g = 0U; g < num_groups; g++) {
         const uint8_t *group = &sw_data[g * group_size];
@@ -786,32 +822,12 @@ void Command_ExecuteMeasureADC(void)
                 memcpy(&batch_buf[bid][len], group, group_size);
                 batch_len[bid] += group_size;
             }
-            board_needs_sync[bid] = true;
         }
     }
 
-    for (uint8_t bid = 0U; bid < DC_MAX_BOARDS; bid++) {
-        if (!board_needs_sync[bid]) continue;
-        if (!save_valid[bid]) continue;
+    /* GPIO sync pulse — resets all driver board PWM timers simultaneously */
+    PWM_SyncPulse();
 
-        DC_Uart_Handle *dc = DC_GetHandle(bid);
-        if (dc == NULL) continue;
-
-        dc_response.ready = false;
-
-        uint8_t sync_payload[1] = { bid };
-        DC_Uart_SendPacket(dc,
-                           measure_adc_request.msg1,
-                           measure_adc_request.msg2,
-                           0x0AU, 0x81U,  /* PWMPhaseSync */
-                           sync_payload, 1U);
-
-        uint32_t t0 = LL_GetTick();
-        while (!dc_response.ready) {
-            if ((LL_GetTick() - t0) >= DC_RESPONSE_TIMEOUT) break;
-        }
-        dc_response.ready = false;
-    }
     phase_ms[2] = (uint16_t)(LL_GetTick() - phase_start);
 
     /* ==================================================================
