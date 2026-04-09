@@ -119,6 +119,24 @@ typedef struct {
 } MeasureAdcRequest;
 
 extern MeasureAdcRequest measure_adc_request;
+extern MeasureAdcRequest sweep_adc_request;   /**< Reuses same struct for CMD_SWEEP_ADC */
+
+void Command_ExecuteSweepADC(void);
+
+/* =================== Switch Save Entry (for restore) ===================== */
+
+/**
+ * @brief  Stores the original state of a measurement switch so it can
+ *         be restored after CMD_MEASURE_ADC completes.
+ */
+typedef struct {
+    uint8_t  bid;              /**< Board ID (0-3)                          */
+    uint8_t  bank;             /**< Bank (0 or 1)                           */
+    uint16_t sw_num;           /**< Switch number (0-299)                   */
+    uint8_t  original_state;   /**< SW_STATE_GND / SW_STATE_HVSG / SW_STATE_FLOAT */
+} SwitchSaveEntry;
+
+#define MAX_MEAS_SAVE_ENTRIES  128U  /**< Max measurement switches to save  */
 
 /* =================== Gantry RS485 Request ================================ */
 
@@ -136,6 +154,7 @@ typedef struct {
 extern GantryRequest    gantry_request;
 
 void Command_ExecuteGantry(void);
+void PWM_SyncPulse(void);
 
 #define DC_LIST_MODE_SET    1U      /**< SET_LIST_OF_SW (5-byte groups)      */
 #define DC_LIST_MODE_GET    2U      /**< GET_LIST_OF_SW (4-byte groups)      */

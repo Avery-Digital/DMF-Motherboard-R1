@@ -74,6 +74,10 @@ static void Command_HandleMeasureADC(USART_Handle *handle,
                                       const PacketHeader *header,
                                       const uint8_t *payload);
 
+static void Command_HandleSweepADC(USART_Handle *handle,
+                                    const PacketHeader *header,
+                                    const uint8_t *payload);
+
 /* ==========================================================================
  *  COMMAND DISPATCH
  *
@@ -103,6 +107,10 @@ void Command_Dispatch(USART_Handle *handle,
 
     case CMD_MEASURE_ADC:
         Command_HandleMeasureADC(handle, header, payload);
+        break;
+
+    case CMD_SWEEP_ADC:
+        Command_HandleSweepADC(handle, header, payload);
         break;
 
     case CMD_PWM_SYNC:
@@ -702,6 +710,50 @@ static void Command_HandleMeasureADC(USART_Handle *handle,
            &payload[MEASURE_ADC_FULL_HDR_SIZE], sw_len);
     measure_adc_request.sw_length  = sw_len;
     measure_adc_request.pending    = true;  /* Must be last — acts as commit */
+}
+
+/* ==========================================================================
+ *  CMD_SWEEP_ADC (0x0C05) — ISR context, deferred to main loop
+ *
+ *  Same payload format as CMD_MEASURE_ADC.  The main loop measures each
+ *  switch individually and returns an array of Vpp values.
+ * ========================================================================== */
+static void Command_HandleSweepADC(USART_Handle *handle,
+                                    const PacketHeader *header,
+                                    const uint8_t *payload)
+{
+    (void)handle;
+
+    if (header->length < (MEASURE_ADC_FULL_HDR_SIZE + DC_SET_GROUP_SIZE)
+        || payload == NULL) {
+        tx_request.msg1    = header->msg1;
+        tx_request.msg2    = header->msg2;
+        tx_request.cmd1    = header->cmd1;
+        tx_request.cmd2    = header->cmd2;
+        tx_request.payload[0] = STATUS_CAT_GENERAL;
+        tx_request.payload[1] = STATUS_PAYLOAD_SHORT;
+        tx_request.length  = 2U;
+        tx_request.pending = true;
+        return;
+    }
+
+    uint8_t  board_mask = payload[0];
+    uint16_t delay_ms   = (uint16_t)payload[1] | ((uint16_t)payload[2] << 8);
+    if (delay_ms < MEASURE_ADC_DELAY_MIN_MS) delay_ms = MEASURE_ADC_DELAY_MIN_MS;
+    if (delay_ms > MEASURE_ADC_DELAY_MAX_MS) delay_ms = MEASURE_ADC_DELAY_MAX_MS;
+
+    uint16_t sw_len = header->length - MEASURE_ADC_FULL_HDR_SIZE;
+
+    sweep_adc_request.msg1       = header->msg1;
+    sweep_adc_request.msg2       = header->msg2;
+    sweep_adc_request.cmd1       = header->cmd1;
+    sweep_adc_request.cmd2       = header->cmd2;
+    sweep_adc_request.delay_ms   = delay_ms;
+    sweep_adc_request.board_mask = board_mask;
+    memcpy(sweep_adc_request.sw_payload,
+           &payload[MEASURE_ADC_FULL_HDR_SIZE], sw_len);
+    sweep_adc_request.sw_length  = sw_len;
+    sweep_adc_request.pending    = true;
 }
 
 /* ==========================================================================

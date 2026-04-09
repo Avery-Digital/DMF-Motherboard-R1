@@ -180,6 +180,44 @@ Payload: [01] [00 00] [00 00 00 2A 01]
 
 ---
 
+## CMD_SWEEP_ADC — `0x0C05`
+
+**Purpose:** Per-switch ADC measurement sweep. Same setup as CMD_MEASURE_ADC (save, GND, restore), but measures each switch individually — enabling one at a time, reading the ADC, computing Vpp, then grounding it before moving to the next.
+
+**Request payload:** Same format as CMD_MEASURE_ADC:
+
+| Byte | Content |
+|------|---------|
+| 0 | Board mask (bits 0-3) |
+| 1–2 | Delay in milliseconds (uint16 LE, 0–100 ms) |
+| 3+ | SET_LIST_OF_SW 5-byte groups: `[boardID][bank][SW_hi][SW_lo][state]` |
+
+Minimum payload: 8 bytes (3-byte header + one 5-byte group).
+
+**Response payload:** `6 + (N × 4)` bytes:
+
+| Byte | Content |
+|------|---------|
+| 0-1 | status_1, status_2 |
+| 2-5 | Total elapsed time in ms (uint32 LE) |
+| 6+ | N × Vpp in volts (IEEE 754 float LE, 4 bytes each) |
+
+**Per-switch measurement loop:**
+
+For each switch i = 0..N-1:
+1. GPIO PWM phase sync (PA12/PC5 pulse)
+2. Start TIM2 timer: `SWITCH_ENABLE_TIME_US + (delay_ms × 1000)` µs
+3. Fire SET_LIST_OF_SW for switch[i] only (fire-and-forget)
+4. Timer expires → burst read 100 ADC samples → calculate Vpp[i]
+5. Drain SET_LIST_OF_SW response
+6. GND switch[i] via SET_LIST_OF_SW (wait for response)
+
+**Timing estimate:** ~13 ms per switch (3 ms enable + 10 ms delay) + UART overhead. 100 switches ≈ 1.3 seconds.
+
+**Save/Restore:** Uses the same HVSG save + SwitchSaveEntry mechanism as CMD_MEASURE_ADC. All switches (HVSG and non-HVSG) are restored to their original state after the sweep completes.
+
+---
+
 ## Vpp Peak-to-Peak Algorithm
 
 ### Overview

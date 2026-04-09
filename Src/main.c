@@ -76,6 +76,7 @@ GantryRequest    gantry_request     = {0};
 
 /* Measure ADC request — switch-controlled deterministic ADC measurement */
 MeasureAdcRequest measure_adc_request = {0};
+MeasureAdcRequest sweep_adc_request   = {0};
 
 /* Actuator board forward request — async, single command */
 ActForwardRequest act_forward_request = {0};
@@ -222,6 +223,12 @@ int main(void)
             if (measure_adc_request.pending) {
                 measure_adc_request.pending = false;
                 Command_ExecuteMeasureADC();
+            }
+
+            /* Execute per-switch ADC sweep — synchronous, blocking */
+            if (sweep_adc_request.pending) {
+                sweep_adc_request.pending = false;
+                Command_ExecuteSweepADC();
             }
 
             /* Execute SET_LIST_OF_SW / GET_LIST_OF_SW — synchronous, blocking */
@@ -696,6 +703,8 @@ void Command_ExecuteMeasureADC(void)
     /* ---- Static buffers ---- */
     static uint8_t save_buf[DC_MAX_BOARDS][PKT_MAX_PAYLOAD]; /* HVSG switch triplets */
     uint16_t save_len[DC_MAX_BOARDS] = {0};
+    static SwitchSaveEntry meas_save[MAX_MEAS_SAVE_ENTRIES]; /* measurement switch original states */
+    uint16_t meas_save_count = 0U;
     bool     save_valid[DC_MAX_BOARDS] = {false};
     bool     error_occurred = false;
 
@@ -744,6 +753,116 @@ void Command_ExecuteMeasureADC(void)
             dc_response.ready = false;
         }
     }
+    /* ---- Phase 1b: Query original state of measurement switches not in HVSG list ----
+     *
+     *  For each measurement switch, check if it already appears in the
+     *  HVSG save list.  If not, its original state is GND or FLOAT and
+     *  we need to query + save it so Phase 6 can restore it.
+     *  Uses GET_LIST_OF_SW (0x0B52): send [bid][bank][SW_hi][SW_lo] groups,
+     *  receive [0xAB][0xCD][5-byte groups...].
+     *
+     *  NOTE: The driver board response echoes back garbled SW bytes, so we
+     *  pair response states with the original query order (1:1 correspondence).
+     *  The state byte at position [4] of each 5-byte group IS correct.
+     *
+     *  If any query times out → abort entire command.
+     */
+    for (uint8_t bid = 0U; bid < DC_MAX_BOARDS; bid++) {
+        if (!(board_mask & (1U << bid))) continue;
+        if (!save_valid[bid]) continue;
+
+        /* Build query and record which switches we're asking about */
+        static uint8_t query_buf[PKT_MAX_PAYLOAD];
+        uint16_t query_len = 0U;
+        uint16_t query_start = meas_save_count;  /* remember where this board's entries start */
+
+        for (uint16_t g = 0U; g < num_groups; g++) {
+            const uint8_t *group = &sw_data[g * group_size];
+            if (group[0] != bid) continue;
+
+            uint8_t  sw_bank = group[1];
+            uint8_t  sw_hi   = group[2];
+            uint8_t  sw_lo   = group[3];
+
+            /* Check if this switch is already in the HVSG save list */
+            bool found = false;
+            uint16_t num_hvsg = save_len[bid] / 3U;
+            for (uint16_t e = 0U; e < num_hvsg; e++) {
+                if (save_buf[bid][e * 3U + 0U] == sw_bank &&
+                    save_buf[bid][e * 3U + 1U] == sw_hi &&
+                    save_buf[bid][e * 3U + 2U] == sw_lo) {
+                    found = true;
+                    break;
+                }
+            }
+
+            if (!found && query_len + 4U <= PKT_MAX_PAYLOAD
+                       && meas_save_count < MAX_MEAS_SAVE_ENTRIES) {
+                /* Pre-populate entry with switch identity from the query;
+                 * original_state will be filled from the response. */
+                meas_save[meas_save_count].bid    = bid;
+                meas_save[meas_save_count].bank   = sw_bank;
+                meas_save[meas_save_count].sw_num = ((uint16_t)sw_hi << 8) | sw_lo;
+                meas_save[meas_save_count].original_state = SW_STATE_GND; /* default */
+                meas_save_count++;
+
+                query_buf[query_len + 0U] = bid;
+                query_buf[query_len + 1U] = sw_bank;
+                query_buf[query_len + 2U] = sw_hi;
+                query_buf[query_len + 3U] = sw_lo;
+                query_len += 4U;
+            }
+        }
+
+        if (query_len > 0U) {
+            DC_Uart_Handle *dc = DC_GetHandle(bid);
+            if (dc == NULL) continue;
+
+            dc_response.ready = false;
+
+            DC_Uart_SendPacket(dc,
+                               measure_adc_request.msg1,
+                               measure_adc_request.msg2,
+                               0x0BU, 0x52U,  /* GET_LIST_OF_SW */
+                               query_buf, query_len);
+
+            uint32_t t0 = LL_GetTick();
+            while (!dc_response.ready) {
+                if ((LL_GetTick() - t0) >= DC_LIST_TIMEOUT) break;
+            }
+
+            if (!dc_response.ready) {
+                /* Timeout — abort entire command */
+                dc_list_active = false;
+                tx_request.msg1    = measure_adc_request.msg1;
+                tx_request.msg2    = measure_adc_request.msg2;
+                tx_request.cmd1    = measure_adc_request.cmd1;
+                tx_request.cmd2    = measure_adc_request.cmd2;
+                tx_request.payload[0] = STATUS_CAT_ADC;
+                tx_request.payload[1] = STATUS_ADC_RESTORE_FAIL;
+                tx_request.length  = 2U;
+                tx_request.pending = true;
+                return;
+            }
+
+            /* Extract state bytes from response, paired 1:1 with query order.
+             * Response: [0xAB][0xCD][5-byte group]... — state is byte [4] of each group.
+             * We already stored switch identity from the query; just fill in the state. */
+            if (dc_response.length > 2U) {
+                uint16_t data_len = dc_response.length - 2U;
+                uint16_t num_resp = data_len / 5U;
+                uint16_t num_queried = meas_save_count - query_start;
+                uint16_t n = (num_resp < num_queried) ? num_resp : num_queried;
+
+                for (uint16_t e = 0U; e < n; e++) {
+                    uint16_t off = 2U + e * 5U;
+                    meas_save[query_start + e].original_state = dc_response.payload[off + 4U];
+                }
+            }
+            dc_response.ready = false;
+        }
+    }
+
     phase_ms[0] = (uint16_t)(LL_GetTick() - phase_start);
 
     /* ==================================================================
@@ -921,32 +1040,47 @@ void Command_ExecuteMeasureADC(void)
     phase_ms[4] = (uint16_t)(LL_GetTick() - phase_start);
 
     /* ==================================================================
-     *  PHASE 6: Restore HVSG switches from saved list (fire-and-forget)
+     *  PHASE 6: Restore all switches to their original state (fire-and-forget)
      *
-     *  Build SET_LIST_OF_SW from saved HVSG triplets, setting each
-     *  back to SW_STATE_HVSG.  Measurement is already captured so
-     *  we send without waiting for responses.
+     *  Two parts:
+     *  6a: Restore HVSG switches from Phase 1 save list → SW_STATE_HVSG
+     *  6b: Restore non-HVSG measurement switches from Phase 1b → original state
+     *
+     *  Both are combined into a single SET_LIST_OF_SW per board.
+     *  Measurement is already captured so we send without waiting.
      * ================================================================== */
     phase_start = LL_GetTick();
     for (uint8_t bid = 0U; bid < DC_MAX_BOARDS; bid++) {
         if (!(board_mask & (1U << bid))) continue;
         if (!save_valid[bid]) continue;
-        if (save_len[bid] == 0U) continue;
 
         DC_Uart_Handle *dc = DC_GetHandle(bid);
         if (dc == NULL) continue;
 
         static uint8_t restore_buf[PKT_MAX_PAYLOAD];
         uint16_t restore_len = 0U;
-        uint16_t num_entries = save_len[bid] / 3U;
 
-        for (uint16_t e = 0U; e < num_entries; e++) {
+        /* 6a: HVSG switches → restore to HVSG */
+        uint16_t num_hvsg = save_len[bid] / 3U;
+        for (uint16_t e = 0U; e < num_hvsg; e++) {
             if (restore_len + 5U > PKT_MAX_PAYLOAD) break;
             restore_buf[restore_len + 0U] = bid;
             restore_buf[restore_len + 1U] = save_buf[bid][e * 3U + 0U];  /* bank */
             restore_buf[restore_len + 2U] = save_buf[bid][e * 3U + 1U];  /* SW_hi */
             restore_buf[restore_len + 3U] = save_buf[bid][e * 3U + 2U];  /* SW_lo */
             restore_buf[restore_len + 4U] = SW_STATE_HVSG;
+            restore_len += 5U;
+        }
+
+        /* 6b: Non-HVSG measurement switches → restore to original state */
+        for (uint16_t e = 0U; e < meas_save_count; e++) {
+            if (meas_save[e].bid != bid) continue;
+            if (restore_len + 5U > PKT_MAX_PAYLOAD) break;
+            restore_buf[restore_len + 0U] = meas_save[e].bid;
+            restore_buf[restore_len + 1U] = meas_save[e].bank;
+            restore_buf[restore_len + 2U] = (uint8_t)(meas_save[e].sw_num >> 8);
+            restore_buf[restore_len + 3U] = (uint8_t)(meas_save[e].sw_num & 0xFFU);
+            restore_buf[restore_len + 4U] = meas_save[e].original_state;
             restore_len += 5U;
         }
 
@@ -967,8 +1101,9 @@ void Command_ExecuteMeasureADC(void)
      *  PHASE 7: Calculate Vpp, elapsed time, and build response
      *
      *  Response (422 bytes):
-     *    [s1][s2][Vpp float LE 4B][total_ms uint32 LE 4B]
+     *    [s1][s2][Vpp float LE 4B][elapsed_ms uint32 LE 4B]
      *    [phase1..6 uint16 LE × 6 = 12B]
+     *    [total_ms uint32 LE 4B]
      *    [100 × 4B ADC samples = 400B]
      * ================================================================== */
     uint32_t elapsed_ms = LL_GetTick() - t_start;
@@ -1007,8 +1142,419 @@ void Command_ExecuteMeasureADC(void)
         tx_request.payload[10U + p * 2U + 1U] = (uint8_t)((phase_ms[p] >> 8) & 0xFFU);
     }
 
-    memcpy(&tx_request.payload[22], meas_burst_payload, ADC_BURST_PAYLOAD_SIZE);
-    tx_request.length  = 2U + 4U + 4U + MEASURE_ADC_TIMING_SIZE + ADC_BURST_PAYLOAD_SIZE;  /* 422 bytes */
+    /* Total time: start to right before shipping data to host */
+    uint32_t total_ms = LL_GetTick() - t_start;
+    tx_request.payload[22] = (uint8_t)(total_ms & 0xFFU);
+    tx_request.payload[23] = (uint8_t)((total_ms >> 8) & 0xFFU);
+    tx_request.payload[24] = (uint8_t)((total_ms >> 16) & 0xFFU);
+    tx_request.payload[25] = (uint8_t)((total_ms >> 24) & 0xFFU);
+
+    memcpy(&tx_request.payload[26], meas_burst_payload, ADC_BURST_PAYLOAD_SIZE);
+    tx_request.length  = 2U + 4U + 4U + MEASURE_ADC_TIMING_SIZE + 4U + ADC_BURST_PAYLOAD_SIZE;  /* 426 bytes */
+    tx_request.pending = true;
+}
+
+/* ==========================================================================
+ *  CMD_SWEEP_ADC — Per-switch ADC measurement sweep
+ *
+ *  Same save/restore as CMD_MEASURE_ADC, but measures each switch
+ *  individually.  For each switch: PWM sync → timer → enable → ADC burst
+ *  → Vpp → GND.  Returns array of Vpp values.
+ *
+ *  Response: [s1][s2][total_ms uint32 LE][Vpp_0 float LE]...[Vpp_N-1]
+ * ========================================================================== */
+void Command_ExecuteSweepADC(void)
+{
+    uint32_t t_start = LL_GetTick();
+
+    const uint8_t *sw_data    = sweep_adc_request.sw_payload;
+    const uint16_t sw_len     = sweep_adc_request.sw_length;
+    const uint16_t delay_ms   = sweep_adc_request.delay_ms;
+    const uint8_t  board_mask = sweep_adc_request.board_mask;
+    const uint8_t  group_size = DC_SET_GROUP_SIZE;  /* 5 */
+
+    uint16_t num_groups = sw_len / group_size;
+    if (num_groups == 0U) {
+        tx_request.msg1    = sweep_adc_request.msg1;
+        tx_request.msg2    = sweep_adc_request.msg2;
+        tx_request.cmd1    = sweep_adc_request.cmd1;
+        tx_request.cmd2    = sweep_adc_request.cmd2;
+        tx_request.payload[0] = STATUS_CAT_GENERAL;
+        tx_request.payload[1] = STATUS_PAYLOAD_SHORT;
+        tx_request.length  = 2U;
+        tx_request.pending = true;
+        return;
+    }
+
+    /* ---- Static buffers ---- */
+    static uint8_t save_buf[DC_MAX_BOARDS][PKT_MAX_PAYLOAD];
+    uint16_t save_len[DC_MAX_BOARDS] = {0};
+    static SwitchSaveEntry meas_save[MAX_MEAS_SAVE_ENTRIES];
+    uint16_t meas_save_count = 0U;
+    bool     save_valid[DC_MAX_BOARDS] = {false};
+    bool     error_occurred = false;
+    static float vpp_results[PKT_MAX_PAYLOAD / DC_SET_GROUP_SIZE]; /* max switches */
+
+    dc_list_active = true;
+
+    /* ==================================================================
+     *  PHASE 1: Save HVSG switches (same as CMD_MEASURE_ADC)
+     * ================================================================== */
+    for (uint8_t bid = 0U; bid < DC_MAX_BOARDS; bid++) {
+        if (!(board_mask & (1U << bid))) continue;
+
+        DC_Uart_Handle *dc = DC_GetHandle(bid);
+        if (dc == NULL) continue;
+
+        dc_response.ready = false;
+
+        uint8_t get_payload[1] = { bid };
+        DC_Uart_SendPacket(dc,
+                           sweep_adc_request.msg1,
+                           sweep_adc_request.msg2,
+                           CMD_GET_HVSG_SW_CMD1, CMD_GET_HVSG_SW_CMD2,
+                           get_payload, 1U);
+
+        uint32_t t0 = LL_GetTick();
+        while (!dc_response.ready) {
+            if ((LL_GetTick() - t0) >= DC_LIST_TIMEOUT) break;
+        }
+
+        if (dc_response.ready) {
+            if (dc_response.length > 3U) {
+                uint16_t data_len = dc_response.length - 3U;
+                if (data_len > PKT_MAX_PAYLOAD) data_len = PKT_MAX_PAYLOAD;
+                memcpy(save_buf[bid], &dc_response.payload[3], data_len);
+                save_len[bid] = data_len;
+            }
+            save_valid[bid] = true;
+            dc_response.ready = false;
+        }
+    }
+
+    /* Abort if no boards responded */
+    {
+        bool any_valid = false;
+        for (uint8_t bid = 0U; bid < DC_MAX_BOARDS; bid++) {
+            if (save_valid[bid]) { any_valid = true; break; }
+        }
+        if (!any_valid) {
+            dc_list_active = false;
+            tx_request.msg1    = sweep_adc_request.msg1;
+            tx_request.msg2    = sweep_adc_request.msg2;
+            tx_request.cmd1    = sweep_adc_request.cmd1;
+            tx_request.cmd2    = sweep_adc_request.cmd2;
+            tx_request.payload[0] = STATUS_CAT_ADC;
+            tx_request.payload[1] = STATUS_ADC_RESTORE_FAIL;
+            tx_request.length  = 2U;
+            tx_request.pending = true;
+            return;
+        }
+    }
+
+    /* ==================================================================
+     *  PHASE 1b: Query measurement switch original states
+     * ================================================================== */
+    for (uint8_t bid = 0U; bid < DC_MAX_BOARDS; bid++) {
+        if (!(board_mask & (1U << bid))) continue;
+        if (!save_valid[bid]) continue;
+
+        static uint8_t query_buf[PKT_MAX_PAYLOAD];
+        uint16_t query_len = 0U;
+        uint16_t query_start = meas_save_count;
+
+        for (uint16_t g = 0U; g < num_groups; g++) {
+            const uint8_t *group = &sw_data[g * group_size];
+            if (group[0] != bid) continue;
+
+            uint8_t sw_bank = group[1];
+            uint8_t sw_hi   = group[2];
+            uint8_t sw_lo   = group[3];
+
+            bool found = false;
+            uint16_t num_hvsg = save_len[bid] / 3U;
+            for (uint16_t e = 0U; e < num_hvsg; e++) {
+                if (save_buf[bid][e * 3U + 0U] == sw_bank &&
+                    save_buf[bid][e * 3U + 1U] == sw_hi &&
+                    save_buf[bid][e * 3U + 2U] == sw_lo) {
+                    found = true;
+                    break;
+                }
+            }
+
+            if (!found && query_len + 4U <= PKT_MAX_PAYLOAD
+                       && meas_save_count < MAX_MEAS_SAVE_ENTRIES) {
+                meas_save[meas_save_count].bid    = bid;
+                meas_save[meas_save_count].bank   = sw_bank;
+                meas_save[meas_save_count].sw_num = ((uint16_t)sw_hi << 8) | sw_lo;
+                meas_save[meas_save_count].original_state = SW_STATE_GND;
+                meas_save_count++;
+
+                query_buf[query_len + 0U] = bid;
+                query_buf[query_len + 1U] = sw_bank;
+                query_buf[query_len + 2U] = sw_hi;
+                query_buf[query_len + 3U] = sw_lo;
+                query_len += 4U;
+            }
+        }
+
+        if (query_len > 0U) {
+            DC_Uart_Handle *dc = DC_GetHandle(bid);
+            if (dc == NULL) continue;
+
+            dc_response.ready = false;
+            DC_Uart_SendPacket(dc,
+                               sweep_adc_request.msg1,
+                               sweep_adc_request.msg2,
+                               0x0BU, 0x52U,
+                               query_buf, query_len);
+
+            uint32_t t0 = LL_GetTick();
+            while (!dc_response.ready) {
+                if ((LL_GetTick() - t0) >= DC_LIST_TIMEOUT) break;
+            }
+
+            if (!dc_response.ready) {
+                dc_list_active = false;
+                tx_request.msg1    = sweep_adc_request.msg1;
+                tx_request.msg2    = sweep_adc_request.msg2;
+                tx_request.cmd1    = sweep_adc_request.cmd1;
+                tx_request.cmd2    = sweep_adc_request.cmd2;
+                tx_request.payload[0] = STATUS_CAT_ADC;
+                tx_request.payload[1] = STATUS_ADC_RESTORE_FAIL;
+                tx_request.length  = 2U;
+                tx_request.pending = true;
+                return;
+            }
+
+            if (dc_response.length > 2U) {
+                uint16_t data_len = dc_response.length - 2U;
+                uint16_t num_resp = data_len / 5U;
+                uint16_t num_queried = meas_save_count - query_start;
+                uint16_t n = (num_resp < num_queried) ? num_resp : num_queried;
+                for (uint16_t e = 0U; e < n; e++) {
+                    uint16_t off = 2U + e * 5U;
+                    meas_save[query_start + e].original_state = dc_response.payload[off + 4U];
+                }
+            }
+            dc_response.ready = false;
+        }
+    }
+
+    /* ==================================================================
+     *  PHASE 2: GND all saved HVSG switches
+     * ================================================================== */
+    for (uint8_t bid = 0U; bid < DC_MAX_BOARDS; bid++) {
+        if (!(board_mask & (1U << bid))) continue;
+        if (!save_valid[bid]) continue;
+        if (save_len[bid] == 0U) continue;
+
+        DC_Uart_Handle *dc = DC_GetHandle(bid);
+        if (dc == NULL) continue;
+
+        static uint8_t gnd_buf[PKT_MAX_PAYLOAD];
+        uint16_t gnd_len = 0U;
+        uint16_t num_entries = save_len[bid] / 3U;
+
+        for (uint16_t e = 0U; e < num_entries; e++) {
+            if (gnd_len + 5U > PKT_MAX_PAYLOAD) break;
+            gnd_buf[gnd_len + 0U] = bid;
+            gnd_buf[gnd_len + 1U] = save_buf[bid][e * 3U + 0U];
+            gnd_buf[gnd_len + 2U] = save_buf[bid][e * 3U + 1U];
+            gnd_buf[gnd_len + 3U] = save_buf[bid][e * 3U + 2U];
+            gnd_buf[gnd_len + 4U] = SW_STATE_GND;
+            gnd_len += 5U;
+        }
+
+        if (gnd_len > 0U) {
+            dc_response.ready = false;
+            DC_Uart_SendPacket(dc,
+                               sweep_adc_request.msg1,
+                               sweep_adc_request.msg2,
+                               0x0BU, 0x51U,
+                               gnd_buf, gnd_len);
+
+            uint32_t t0 = LL_GetTick();
+            while (!dc_response.ready) {
+                if ((LL_GetTick() - t0) >= DC_LIST_TIMEOUT) break;
+            }
+            if (dc_response.ready) {
+                dc_response.ready = false;
+            } else {
+                error_occurred = true;
+            }
+        }
+    }
+
+    /* ==================================================================
+     *  PER-SWITCH MEASUREMENT LOOP
+     *
+     *  For each switch:
+     *    1. PWM sync (GPIO pulse)
+     *    2. Start timer (1 switch × SWITCH_ENABLE_TIME_US + delay)
+     *    3. Enable this switch (fire-and-forget)
+     *    4. Timer expires → burst ADC → Vpp
+     *    5. Drain SET_LIST_OF_SW response
+     *    6. GND this switch (wait for response)
+     * ================================================================== */
+    static uint32_t burst_raw[ADC_BURST_COUNT];
+
+    for (uint16_t g = 0U; g < num_groups; g++) {
+        const uint8_t *group = &sw_data[g * group_size];
+        uint8_t bid = group[0];
+
+        if (!(board_mask & (1U << bid))) { vpp_results[g] = 0.0f; continue; }
+        if (!save_valid[bid])            { vpp_results[g] = 0.0f; continue; }
+
+        DC_Uart_Handle *dc = DC_GetHandle(bid);
+        if (dc == NULL) { vpp_results[g] = 0.0f; continue; }
+
+        /* 1. PWM sync */
+        PWM_SyncPulse();
+
+        /* 2. Start timer */
+        uint32_t total_us = SWITCH_ENABLE_TIME_US + ((uint32_t)delay_ms * 1000U);
+        uint32_t arr_val  = (total_us * 10U) - 1U;  /* 100 ns ticks */
+
+        LL_APB1_GRP1_EnableClock(LL_APB1_GRP1_PERIPH_TIM2);
+        LL_TIM_SetPrescaler(TIM2, 23U);
+        LL_TIM_SetAutoReload(TIM2, arr_val);
+        LL_TIM_SetOnePulseMode(TIM2, LL_TIM_ONEPULSEMODE_SINGLE);
+        LL_TIM_GenerateEvent_UPDATE(TIM2);
+        LL_TIM_ClearFlag_UPDATE(TIM2);
+        LL_TIM_EnableCounter(TIM2);
+
+        /* 3. Enable this one switch (fire-and-forget) */
+        uint8_t sw_cmd[DC_SET_GROUP_SIZE];
+        memcpy(sw_cmd, group, DC_SET_GROUP_SIZE);
+        DC_Uart_SendPacket(dc,
+                           sweep_adc_request.msg1,
+                           sweep_adc_request.msg2,
+                           0x0BU, 0x51U,
+                           sw_cmd, DC_SET_GROUP_SIZE);
+
+        /* 4. Timer expires → burst ADC → Vpp */
+        while (!LL_TIM_IsActiveFlag_UPDATE(TIM2)) { }
+
+        LL_TIM_ClearFlag_UPDATE(TIM2);
+        LL_TIM_DisableCounter(TIM2);
+        LL_APB1_GRP1_DisableClock(LL_APB1_GRP1_PERIPH_TIM2);
+
+        int32_t min_val = INT32_MAX;
+        int32_t max_val = INT32_MIN;
+
+        for (uint32_t i = 0U; i < ADC_BURST_COUNT; i++) {
+            uint32_t sample = 0U;
+            SPI_LTC2338_Read(&spi2_handle, &sample);
+            burst_raw[i] = sample;
+
+            int32_t s = (int32_t)(sample & 0x3FFFFU);
+            if (s & 0x20000) s |= (int32_t)0xFFFC0000;
+            if (s < min_val) min_val = s;
+            if (s > max_val) max_val = s;
+        }
+
+        vpp_results[g] = (float)(max_val - min_val)
+                       * (ADC_FULL_SCALE_V / ADC_FULL_SCALE_CODES);
+
+        /* 5. Drain SET_LIST_OF_SW response */
+        {
+            uint32_t t0 = LL_GetTick();
+            while (!dc_response.ready) {
+                if ((LL_GetTick() - t0) >= DC_LIST_TIMEOUT) break;
+            }
+            dc_response.ready = false;
+        }
+
+        /* 6. GND this switch (wait for response) */
+        {
+            uint8_t gnd_cmd[DC_SET_GROUP_SIZE];
+            memcpy(gnd_cmd, group, DC_SET_GROUP_SIZE);
+            gnd_cmd[4] = SW_STATE_GND;
+
+            dc_response.ready = false;
+            DC_Uart_SendPacket(dc,
+                               sweep_adc_request.msg1,
+                               sweep_adc_request.msg2,
+                               0x0BU, 0x51U,
+                               gnd_cmd, DC_SET_GROUP_SIZE);
+
+            uint32_t t0 = LL_GetTick();
+            while (!dc_response.ready) {
+                if ((LL_GetTick() - t0) >= DC_LIST_TIMEOUT) break;
+            }
+            dc_response.ready = false;
+        }
+    }
+
+    /* ==================================================================
+     *  RESTORE: HVSG switches + non-HVSG measurement switches
+     * ================================================================== */
+    for (uint8_t bid = 0U; bid < DC_MAX_BOARDS; bid++) {
+        if (!(board_mask & (1U << bid))) continue;
+        if (!save_valid[bid]) continue;
+
+        DC_Uart_Handle *dc = DC_GetHandle(bid);
+        if (dc == NULL) continue;
+
+        static uint8_t restore_buf[PKT_MAX_PAYLOAD];
+        uint16_t restore_len = 0U;
+
+        uint16_t num_hvsg = save_len[bid] / 3U;
+        for (uint16_t e = 0U; e < num_hvsg; e++) {
+            if (restore_len + 5U > PKT_MAX_PAYLOAD) break;
+            restore_buf[restore_len + 0U] = bid;
+            restore_buf[restore_len + 1U] = save_buf[bid][e * 3U + 0U];
+            restore_buf[restore_len + 2U] = save_buf[bid][e * 3U + 1U];
+            restore_buf[restore_len + 3U] = save_buf[bid][e * 3U + 2U];
+            restore_buf[restore_len + 4U] = SW_STATE_HVSG;
+            restore_len += 5U;
+        }
+
+        for (uint16_t e = 0U; e < meas_save_count; e++) {
+            if (meas_save[e].bid != bid) continue;
+            if (restore_len + 5U > PKT_MAX_PAYLOAD) break;
+            restore_buf[restore_len + 0U] = meas_save[e].bid;
+            restore_buf[restore_len + 1U] = meas_save[e].bank;
+            restore_buf[restore_len + 2U] = (uint8_t)(meas_save[e].sw_num >> 8);
+            restore_buf[restore_len + 3U] = (uint8_t)(meas_save[e].sw_num & 0xFFU);
+            restore_buf[restore_len + 4U] = meas_save[e].original_state;
+            restore_len += 5U;
+        }
+
+        if (restore_len > 0U) {
+            DC_Uart_SendPacket(dc,
+                               sweep_adc_request.msg1,
+                               sweep_adc_request.msg2,
+                               0x0BU, 0x51U,
+                               restore_buf, restore_len);
+        }
+    }
+
+    dc_list_active = false;
+
+    /* ==================================================================
+     *  BUILD RESPONSE: [s1][s2][total_ms uint32 LE][N × Vpp float LE]
+     * ================================================================== */
+    uint32_t total_ms = LL_GetTick() - t_start;
+
+    tx_request.msg1 = sweep_adc_request.msg1;
+    tx_request.msg2 = sweep_adc_request.msg2;
+    tx_request.cmd1 = sweep_adc_request.cmd1;
+    tx_request.cmd2 = sweep_adc_request.cmd2;
+
+    tx_request.payload[0] = error_occurred ? STATUS_CAT_ADC : STATUS_CAT_OK;
+    tx_request.payload[1] = error_occurred ? STATUS_ADC_RESTORE_FAIL : STATUS_CODE_OK;
+    tx_request.payload[2] = (uint8_t)(total_ms & 0xFFU);
+    tx_request.payload[3] = (uint8_t)((total_ms >> 8) & 0xFFU);
+    tx_request.payload[4] = (uint8_t)((total_ms >> 16) & 0xFFU);
+    tx_request.payload[5] = (uint8_t)((total_ms >> 24) & 0xFFU);
+
+    for (uint16_t g = 0U; g < num_groups; g++) {
+        memcpy(&tx_request.payload[6U + g * 4U], &vpp_results[g], sizeof(float));
+    }
+
+    tx_request.length  = 2U + 4U + (num_groups * 4U);
     tx_request.pending = true;
 }
 

@@ -1,5 +1,28 @@
 # Changelog
 
+## v1.4.0 — 2026-04-09
+
+### CMD_SWEEP_ADC (0x0C05) — Per-Switch ADC Sweep
+- New command: measures each switch individually and returns N × Vpp values
+- Same payload format as CMD_MEASURE_ADC (board_mask + delay + switch groups)
+- Per-switch loop: PWM sync → timer → enable 1 switch → ADC burst → Vpp → GND
+- Response: `[s1][s2][total_ms uint32 LE][N × Vpp float LE]`
+- Full save/restore with SwitchSaveEntry (HVSG + non-HVSG switches)
+
+### CMD_MEASURE_ADC Improvements
+- Added `SwitchSaveEntry` struct for clean save/restore of non-HVSG measurement switches
+- Phase 1b: queries original state of measurement switches not in HVSG list via GET_LIST_OF_SW (0x0B52)
+- Phase 6: restores both HVSG and non-HVSG switches to original state
+- Aborts entire command if Phase 1b times out (no partial measurement)
+- Added `total_ms` timestamp (start to before TX) in response — response now 426 bytes
+- `PWM_SyncPulse()` prototype added to `main.h` (fixes implicit declaration warning)
+
+### Driver Board Fix
+- Fixed `GetListOfSwitches` (0x0B52): response was echoing garbled SW_hi/SW_lo bytes
+- Status bytes changed from 0xAB/0xCD to STATUS_CAT_OK/STATUS_CODE_OK
+
+---
+
 ## v1.3.2 — 2026-04-09
 
 ### Standalone PWM Sync Command

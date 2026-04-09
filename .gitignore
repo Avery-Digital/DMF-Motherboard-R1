@@ -404,3 +404,6 @@ FodyWeavers.xsd
 
 # Datasheets (PDFs too large for GitHub)
 Datasheets/
+
+# Screenshots
+screenshots/
