@@ -105,6 +105,22 @@ void Command_Dispatch(USART_Handle *handle,
         Command_HandleMeasureADC(handle, header, payload);
         break;
 
+    case CMD_PWM_SYNC:
+    {
+        /* Pulse GPIO sync lines — resets PWM timers on all driver boards */
+        PWM_SyncPulse();
+
+        uint8_t response[2] = { STATUS_CAT_OK, STATUS_CODE_OK };
+        tx_request.msg1    = header->msg1;
+        tx_request.msg2    = header->msg2;
+        tx_request.cmd1    = header->cmd1;
+        tx_request.cmd2    = header->cmd2;
+        memcpy(tx_request.payload, response, sizeof(response));
+        tx_request.length  = sizeof(response);
+        tx_request.pending = true;
+        break;
+    }
+
     /* ---- Load Switch Commands (0x0C10–0x0C19) ---- */
     case CMD_LOAD_VALVE1:
         Command_HandleLoadSwitch(handle, header, payload, LOAD_VALVE1);

@@ -40,10 +40,11 @@ extern "C" {
 /* Firmware version */
 #define FW_VERSION_MAJOR    1U
 #define FW_VERSION_MINOR    3U
-#define FW_VERSION_PATCH    1U
+#define FW_VERSION_PATCH    2U
 #define CMD_READ_ADC        CMD_CODE(0x0C, 0x01)    /**< Read LTC2338-18 ADC     */
 #define CMD_BURST_ADC       CMD_CODE(0x0C, 0x02)    /**< Burst 100x ADC reads    */
 #define CMD_MEASURE_ADC     CMD_CODE(0x0C, 0x03)    /**< Switch-controlled ADC   */
+#define CMD_PWM_SYNC        CMD_CODE(0x0C, 0x04)    /**< GPIO PWM phase sync     */
 
 /* ---- Load Switch Commands (0x0C10–0x0C19) ----
  *

@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.3.2 — 2026-04-09
+
+### Standalone PWM Sync Command
+- Added `CMD_PWM_SYNC` (0x0C04) — triggers GPIO sync pulse on demand
+- Calls `PWM_SyncPulse()` (PA12 + PC5), responds with `[status1][status2]`
+- Use to sync AC waveforms independently of CMD_MEASURE_ADC
+
+---
+
 ## v1.3.1 — 2026-04-09
 
 ### Hardware GPIO PWM Phase Sync
