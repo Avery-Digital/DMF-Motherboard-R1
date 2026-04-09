@@ -634,12 +634,15 @@ void Command_ExecuteDcList(void)
  * ========================================================================== */
 void Command_ExecuteMeasureADC(void)
 {
-    /* ---- Elapsed time tracking ---- */
+    /* ---- Elapsed time and phase timing ---- */
     uint32_t t_start = LL_GetTick();
+    uint16_t phase_ms[MEASURE_ADC_PHASE_COUNT] = {0};
+    uint32_t phase_start;
 
     const uint8_t *sw_data    = measure_adc_request.sw_payload;
     const uint16_t sw_len     = measure_adc_request.sw_length;
     const uint16_t delay_ms   = measure_adc_request.delay_ms;
+    const uint8_t  board_mask = measure_adc_request.board_mask;
     const uint8_t  group_size = DC_SET_GROUP_SIZE;  /* 5 */
 
     uint16_t num_groups = sw_len / group_size;
@@ -670,8 +673,12 @@ void Command_ExecuteMeasureADC(void)
      *  Uses GET_HVSG_SWITCHES (0x0B54) — returns only the switches set
      *  to HVSG as [bank][SW_hi][SW_lo] triplets.  Much smaller than
      *  GET_ALL_SW (603 bytes → typically < 50 bytes).
+     *  Skips boards not in board_mask.
      * ================================================================== */
+    phase_start = LL_GetTick();
     for (uint8_t bid = 0U; bid < DC_MAX_BOARDS; bid++) {
+        if (!(board_mask & (1U << bid))) continue;
+
         DC_Uart_Handle *dc = DC_GetHandle(bid);
         if (dc == NULL) continue;
 
@@ -702,6 +709,7 @@ void Command_ExecuteMeasureADC(void)
             dc_response.ready = false;
         }
     }
+    phase_ms[0] = (uint16_t)(LL_GetTick() - phase_start);
 
     /* ==================================================================
      *  PHASE 2: Selectively GND only the HVSG switches
@@ -709,7 +717,9 @@ void Command_ExecuteMeasureADC(void)
      *  Instead of AllGND (all 600 switches), build SET_LIST_OF_SW from
      *  the saved HVSG list, setting each to SW_STATE_GND.
      * ================================================================== */
+    phase_start = LL_GetTick();
     for (uint8_t bid = 0U; bid < DC_MAX_BOARDS; bid++) {
+        if (!(board_mask & (1U << bid))) continue;
         if (!save_valid[bid]) continue;
         if (save_len[bid] == 0U) continue;
 
@@ -751,14 +761,18 @@ void Command_ExecuteMeasureADC(void)
             }
         }
     }
+    phase_ms[1] = (uint16_t)(LL_GetTick() - phase_start);
 
     /* ==================================================================
      *  PHASE 3: PWM phase sync — send and WAIT for response
      *
      *  The response confirms the driver board has reset TIM2/TIM1/TIM8
      *  counters to zero.  The deterministic timer starts AFTER the
-     *  response arrives.
+     *  response arrives.  Uses DC_RESPONSE_TIMEOUT (10 ms) since
+     *  PWMPhaseSync responds in ~1-2 ms.
      * ================================================================== */
+    phase_start = LL_GetTick();
+
     static uint8_t batch_buf[DC_MAX_BOARDS][PKT_MAX_PAYLOAD];
     uint16_t batch_len[DC_MAX_BOARDS] = {0};
     bool board_needs_sync[DC_MAX_BOARDS] = {false};
@@ -766,7 +780,7 @@ void Command_ExecuteMeasureADC(void)
     for (uint16_t g = 0U; g < num_groups; g++) {
         const uint8_t *group = &sw_data[g * group_size];
         uint8_t bid = group[0];
-        if (bid < DC_MAX_BOARDS) {
+        if (bid < DC_MAX_BOARDS && (board_mask & (1U << bid))) {
             uint16_t len = batch_len[bid];
             if (len + group_size <= PKT_MAX_PAYLOAD) {
                 memcpy(&batch_buf[bid][len], group, group_size);
@@ -794,10 +808,11 @@ void Command_ExecuteMeasureADC(void)
 
         uint32_t t0 = LL_GetTick();
         while (!dc_response.ready) {
-            if ((LL_GetTick() - t0) >= DC_LIST_TIMEOUT) break;
+            if ((LL_GetTick() - t0) >= DC_RESPONSE_TIMEOUT) break;
         }
         dc_response.ready = false;
     }
+    phase_ms[2] = (uint16_t)(LL_GetTick() - phase_start);
 
     /* ==================================================================
      *  PHASE 4: Start TIM2 AFTER phase sync, then fire switches
@@ -806,7 +821,11 @@ void Command_ExecuteMeasureADC(void)
      *    APB1 timer clock = 240 MHz (D2PPRE1 = ÷2 → timer ×2)
      *    PSC = 23 → 10 MHz → 100 ns per tick
      *    ARR = total_ticks - 1 (32-bit, max ~429 seconds)
+     *
+     *  Includes burst ADC read immediately after timer expires.
      * ================================================================== */
+    phase_start = LL_GetTick();
+
     uint32_t total_us = ((uint32_t)num_groups * SWITCH_ENABLE_TIME_US)
                       + ((uint32_t)delay_ms * 1000U);
     uint32_t arr_val  = (total_us * 10U) - 1U;  /* 100 ns ticks */
@@ -844,9 +863,7 @@ void Command_ExecuteMeasureADC(void)
     LL_TIM_DisableCounter(TIM2);
     LL_APB1_GRP1_DisableClock(LL_APB1_GRP1_PERIPH_TIM2);
 
-    /* ==================================================================
-     *  PHASE 5: Burst ADC read — 100 samples via SPI2
-     * ================================================================== */
+    /* Burst ADC read — 100 samples via SPI2 */
     static uint8_t  meas_burst_payload[ADC_BURST_PAYLOAD_SIZE];
     static uint32_t meas_burst_raw[ADC_BURST_COUNT];
 
@@ -868,11 +885,14 @@ void Command_ExecuteMeasureADC(void)
             meas_burst_payload[offset + 3U] = 0xFFU;
         }
     }
+    phase_ms[3] = (uint16_t)(LL_GetTick() - phase_start);
 
     /* ==================================================================
-     *  Drain stale Phase 4 responses
+     *  PHASE 5: Drain stale Phase 4 responses
      * ================================================================== */
+    phase_start = LL_GetTick();
     for (uint8_t bid = 0U; bid < DC_MAX_BOARDS; bid++) {
+        if (!(board_mask & (1U << bid))) continue;
         if (batch_len[bid] == 0U) continue;
         if (!save_valid[bid]) continue;
 
@@ -882,15 +902,18 @@ void Command_ExecuteMeasureADC(void)
         }
         dc_response.ready = false;
     }
+    phase_ms[4] = (uint16_t)(LL_GetTick() - phase_start);
 
     /* ==================================================================
-     *  PHASE 6: Restore HVSG switches from saved list
+     *  PHASE 6: Restore HVSG switches from saved list (fire-and-forget)
      *
      *  Build SET_LIST_OF_SW from saved HVSG triplets, setting each
-     *  back to SW_STATE_HVSG.  No AllGND needed — just restore the
-     *  specific switches that were changed.
+     *  back to SW_STATE_HVSG.  Measurement is already captured so
+     *  we send without waiting for responses.
      * ================================================================== */
+    phase_start = LL_GetTick();
     for (uint8_t bid = 0U; bid < DC_MAX_BOARDS; bid++) {
+        if (!(board_mask & (1U << bid))) continue;
         if (!save_valid[bid]) continue;
         if (save_len[bid] == 0U) continue;
 
@@ -912,27 +935,25 @@ void Command_ExecuteMeasureADC(void)
         }
 
         if (restore_len > 0U) {
-            dc_response.ready = false;
-
             DC_Uart_SendPacket(dc,
                                measure_adc_request.msg1,
                                measure_adc_request.msg2,
                                0x0BU, 0x51U,  /* SET_LIST_OF_SW */
                                restore_buf, restore_len);
-
-            uint32_t t0 = LL_GetTick();
-            while (!dc_response.ready) {
-                if ((LL_GetTick() - t0) >= DC_LIST_TIMEOUT) break;
-            }
-            dc_response.ready = false;
         }
     }
+    phase_ms[5] = (uint16_t)(LL_GetTick() - phase_start);
 
     /* Done with synchronous DC processing */
     dc_list_active = false;
 
     /* ==================================================================
      *  PHASE 7: Calculate Vpp, elapsed time, and build response
+     *
+     *  Response (422 bytes):
+     *    [s1][s2][Vpp float LE 4B][total_ms uint32 LE 4B]
+     *    [phase1..6 uint16 LE × 6 = 12B]
+     *    [100 × 4B ADC samples = 400B]
      * ================================================================== */
     uint32_t elapsed_ms = LL_GetTick() - t_start;
 
@@ -951,8 +972,6 @@ void Command_ExecuteMeasureADC(void)
     float vpp = (float)(max_val - min_val)
               * (ADC_FULL_SCALE_V / ADC_FULL_SCALE_CODES);
 
-    /* Response: [s1][s2][Vpp float LE (4B)][elapsed_ms uint32 LE (4B)][burst (400B)]
-     * Total: 410 bytes */
     tx_request.msg1   = measure_adc_request.msg1;
     tx_request.msg2   = measure_adc_request.msg2;
     tx_request.cmd1   = measure_adc_request.cmd1;
@@ -965,8 +984,15 @@ void Command_ExecuteMeasureADC(void)
     tx_request.payload[7] = (uint8_t)((elapsed_ms >> 8) & 0xFFU);
     tx_request.payload[8] = (uint8_t)((elapsed_ms >> 16) & 0xFFU);
     tx_request.payload[9] = (uint8_t)((elapsed_ms >> 24) & 0xFFU);
-    memcpy(&tx_request.payload[10], meas_burst_payload, ADC_BURST_PAYLOAD_SIZE);
-    tx_request.length  = 2U + 4U + 4U + ADC_BURST_PAYLOAD_SIZE;  /* 410 bytes */
+
+    /* Per-phase timings: 6 × uint16 LE at bytes 10-21 */
+    for (uint8_t p = 0U; p < MEASURE_ADC_PHASE_COUNT; p++) {
+        tx_request.payload[10U + p * 2U]      = (uint8_t)(phase_ms[p] & 0xFFU);
+        tx_request.payload[10U + p * 2U + 1U] = (uint8_t)((phase_ms[p] >> 8) & 0xFFU);
+    }
+
+    memcpy(&tx_request.payload[22], meas_burst_payload, ADC_BURST_PAYLOAD_SIZE);
+    tx_request.length  = 2U + 4U + 4U + MEASURE_ADC_TIMING_SIZE + ADC_BURST_PAYLOAD_SIZE;  /* 422 bytes */
     tx_request.pending = true;
 }
 

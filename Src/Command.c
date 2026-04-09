@@ -335,12 +335,10 @@ static void Command_HandleBurstADC(USART_Handle *handle,
 void Command_ExecuteBurstADC(void)
 {
     static uint8_t  burst_payload[ADC_BURST_PAYLOAD_SIZE];
-    static uint32_t burst_raw[ADC_BURST_COUNT];  /* Debug: raw samples visible in debugger */
 
     for (uint32_t i = 0U; i < ADC_BURST_COUNT; i++) {
         uint32_t   sample = 0U;
         SPI_Status status = SPI_LTC2338_Read(&spi2_handle, &sample);
-        burst_raw[i] = sample;
 
         uint32_t offset = i * 4U;
 
@@ -655,8 +653,8 @@ static void Command_HandleMeasureADC(USART_Handle *handle,
 {
     (void)handle;
 
-    /* Need at least 2-byte delay + one 5-byte switch group */
-    if (header->length < (MEASURE_ADC_DELAY_HDR_SIZE + DC_SET_GROUP_SIZE)
+    /* Need at least 1-byte mask + 2-byte delay + one 5-byte switch group */
+    if (header->length < (MEASURE_ADC_FULL_HDR_SIZE + DC_SET_GROUP_SIZE)
         || payload == NULL) {
         tx_request.msg1    = header->msg1;
         tx_request.msg2    = header->msg2;
@@ -669,23 +667,25 @@ static void Command_HandleMeasureADC(USART_Handle *handle,
         return;
     }
 
-    /* Parse delay (uint16 LE) */
-    uint16_t delay_ms = (uint16_t)payload[0] | ((uint16_t)payload[1] << 8);
+    /* Parse board mask and delay */
+    uint8_t  board_mask = payload[0];
+    uint16_t delay_ms   = (uint16_t)payload[1] | ((uint16_t)payload[2] << 8);
     if (delay_ms < MEASURE_ADC_DELAY_MIN_MS) delay_ms = MEASURE_ADC_DELAY_MIN_MS;
     if (delay_ms > MEASURE_ADC_DELAY_MAX_MS) delay_ms = MEASURE_ADC_DELAY_MAX_MS;
 
-    /* Switch payload starts after delay header */
-    uint16_t sw_len = header->length - MEASURE_ADC_DELAY_HDR_SIZE;
+    /* Switch payload starts after full header (mask + delay) */
+    uint16_t sw_len = header->length - MEASURE_ADC_FULL_HDR_SIZE;
 
-    measure_adc_request.msg1     = header->msg1;
-    measure_adc_request.msg2     = header->msg2;
-    measure_adc_request.cmd1     = header->cmd1;
-    measure_adc_request.cmd2     = header->cmd2;
-    measure_adc_request.delay_ms = delay_ms;
+    measure_adc_request.msg1       = header->msg1;
+    measure_adc_request.msg2       = header->msg2;
+    measure_adc_request.cmd1       = header->cmd1;
+    measure_adc_request.cmd2       = header->cmd2;
+    measure_adc_request.delay_ms   = delay_ms;
+    measure_adc_request.board_mask = board_mask;
     memcpy(measure_adc_request.sw_payload,
-           &payload[MEASURE_ADC_DELAY_HDR_SIZE], sw_len);
-    measure_adc_request.sw_length = sw_len;
-    measure_adc_request.pending   = true;  /* Must be last — acts as commit */
+           &payload[MEASURE_ADC_FULL_HDR_SIZE], sw_len);
+    measure_adc_request.sw_length  = sw_len;
+    measure_adc_request.pending    = true;  /* Must be last — acts as commit */
 }
 
 /* ==========================================================================

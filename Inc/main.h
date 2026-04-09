@@ -115,6 +115,7 @@ typedef struct {
     uint8_t         sw_payload[PKT_MAX_PAYLOAD]; /**< Switch groups (5B each)  */
     uint16_t        sw_length;                    /**< Total switch payload bytes */
     uint16_t        delay_ms;                     /**< Deterministic delay in ms  */
+    uint8_t         board_mask;                   /**< Bits 0-3: which boards     */
 } MeasureAdcRequest;
 
 extern MeasureAdcRequest measure_adc_request;
@@ -140,7 +141,7 @@ void Command_ExecuteGantry(void);
 #define DC_LIST_MODE_GET    2U      /**< GET_LIST_OF_SW (4-byte groups)      */
 #define DC_RESPONSE_TIMEOUT 10U     /**< Timeout in ms for async responses   */
 #define DC_LIST_TIMEOUT     200U    /**< Timeout in ms for batched list cmds */
-#define DC_MAX_BOARDS       1U      /**< Number of daughtercard slots        */
+#define DC_MAX_BOARDS       4U      /**< Number of daughtercard slots        */
 
 extern TxRequest        tx_request;
 extern BurstRequest     burst_request;

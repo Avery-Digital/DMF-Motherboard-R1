@@ -110,63 +110,72 @@ Where `n` ranges from 0 to 99.
 
 ## CMD_MEASURE_ADC — `0x0C03`
 
-**Purpose:** Atomic switch-controlled ADC measurement with deterministic timing. Saves current switch states, sets all switches to GND, enables specified switches to HVSG, waits a hardware-timed delay, burst-reads the ADC, restores original switch states, and returns Vpp + raw samples.
+**Purpose:** Atomic switch-controlled ADC measurement with deterministic timing. Saves HVSG switch states, grounds them, enables specified switches, waits a hardware-timed delay, burst-reads the ADC, restores switch states, and returns Vpp + phase timing + raw samples.
 
-**Request payload:** 7+ bytes:
+**Request payload:** 8+ bytes:
 
 | Byte | Content |
 |------|---------|
-| 0–1 | Delay in milliseconds (uint16 LE, clamped to 1–100 ms) |
-| 2+ | SET_LIST_OF_SW 5-byte groups: `[boardID][bank][SW_hi][SW_lo][state]` |
+| 0 | Board mask (bits 0-3 = boards 0-3, 1=include, 0=skip) |
+| 1–2 | Delay in milliseconds (uint16 LE, clamped to 0–100 ms) |
+| 3+ | SET_LIST_OF_SW 5-byte groups: `[boardID][bank][SW_hi][SW_lo][state]` |
 
-Minimum payload: 7 bytes (2-byte delay + one 5-byte switch group).
+Minimum payload: 8 bytes (1-byte mask + 2-byte delay + one 5-byte switch group).
 
-**Response payload:** 406 bytes:
+**Response payload:** 422 bytes:
 
 | Byte | Content |
 |------|---------|
 | 0 | status_1 (category: 0x00=OK, 0x06=ADC error) |
 | 1 | status_2 (code: 0x00=OK, 0x04=DC timeout, 0x05=restore fail) |
 | 2–5 | Vpp in volts (IEEE 754 float, little-endian) |
-| 6–405 | 100 ADC samples × 4 bytes each (same format as CMD_BURST_ADC) |
+| 6–9 | Total elapsed time in ms (uint32 LE) |
+| 10–11 | Phase 1 time — Save HVSG (uint16 LE) |
+| 12–13 | Phase 2 time — GND HVSG (uint16 LE) |
+| 14–15 | Phase 3 time — PWM Sync (uint16 LE) |
+| 16–17 | Phase 4 time — Deterministic: timer + fire + burst ADC (uint16 LE) |
+| 18–19 | Phase 5 time — Drain responses (uint16 LE) |
+| 20–21 | Phase 6 time — Restore (uint16 LE) |
+| 22–421 | 100 ADC samples × 4 bytes each (same format as CMD_BURST_ADC) |
 
 **Vpp calculation:** See [Vpp Algorithm](#vpp-peak-to-peak-algorithm) section below for full details.
 
 **Execution context:** Two-stage deferred pattern:
 
-1. **ISR stage** (`Command_HandleMeasureADC`): Parses delay and switch groups into `measure_adc_request`, sets `.pending = true`.
-2. **Main loop stage** (`Command_ExecuteMeasureADC`): Executes the 7-phase blocking sequence:
-   - Phase 1: GET_ALL_SW (0x0B53) on ALL 4 boards → save 600-byte state arrays
-   - Phase 2: AllGND (0x0A02) on ALL 4 boards (clean measurement baseline)
-   - Phase 3: Send PWMPhaseSync (0x0A81) and wait for response — confirms TIM2/TIM1/TIM8 counters reset to zero on driver board
-   - Phase 4: Start TIM6 (now locked to actual PWM reset), then fire SET_LIST_OF_SW (fire-and-forget). Timer = `(num_switches × SWITCH_ENABLE_TIME_US) + user_delay`. PSC=239 → 1 µs ticks, max 65.5 ms.
-   - Phase 5: 100× SPI_LTC2338_Read burst (~300 µs)
-   - Phase 6: AllGND + SET_LIST_OF_SW restore (only non-GND switches replayed)
-   - Phase 7: Vpp calculation → response via `tx_request`
+1. **ISR stage** (`Command_HandleMeasureADC`): Parses board mask, delay, and switch groups into `measure_adc_request`, sets `.pending = true`.
+2. **Main loop stage** (`Command_ExecuteMeasureADC`): Executes the 7-phase blocking sequence (boards not in `board_mask` are skipped in all phases):
+   - Phase 1: GET_HVSG_SWITCHES (0x0B54) → save only HVSG switch triplets (~50 bytes vs 603)
+   - Phase 2: Selectively GND only the saved HVSG switches via SET_LIST_OF_SW
+   - Phase 3: PWMPhaseSync (0x0A81) — wait for response (10 ms timeout). Confirms TIM2/TIM1/TIM8 counters reset on driver board
+   - Phase 4: Start TIM2, fire SET_LIST_OF_SW (no wait), spin until timer expires, burst ADC read. Timer = `(num_switches × 3000 µs) + (delay_ms × 1000 µs)`. PSC=23 → 100 ns ticks, 32-bit, max ~429 seconds
+   - Phase 5: Drain stale Phase 4 responses (200 ms timeout per board)
+   - Phase 6: Restore saved switches to HVSG via SET_LIST_OF_SW (fire-and-forget, no response wait)
+   - Phase 7: Vpp calculation + phase timing + response via `tx_request`
 
-**Deterministic timing:** PWMPhaseSync is sent and the motherboard waits for the response, confirming the driver board's TIM2/TIM1/TIM8 counters are reset to zero. TIM6 starts AFTER this confirmation, so it is locked to the actual PWM counter reset (offset is the constant UART response transit time). SET_LIST_OF_SW is then sent fire-and-forget within the timer window. The ADC burst fires at a fixed offset from the confirmed phase reset. Resolution is 1 µs.
+**Deterministic timing:** PWMPhaseSync is sent and the motherboard waits for the response, confirming the driver board's TIM2/TIM1/TIM8 counters are reset to zero. TIM2 starts AFTER this confirmation, so it is locked to the actual PWM counter reset. Resolution is 100 ns.
 
-**Error handling:** If GET_ALL_SW fails (Phase 1 timeout), that board is skipped in all subsequent phases. Phase 3 is fire-and-forget (no response wait). If Phase 2/6 timeout, the ADC measurement still completes but the response status indicates `STATUS_ADC_RESTORE_FAIL`.
+**Error handling:** If GET_HVSG_SWITCHES fails (Phase 1 timeout), that board is skipped in all subsequent phases. If Phase 2 times out, `error_occurred` is set. Phase 6 is fire-and-forget — measurement is already captured. Response status indicates `STATUS_ADC_RESTORE_FAIL` if any phase had an error.
 
 **Constants:**
 
 ```c
 #define CMD_MEASURE_ADC             CMD_CODE(0x0C, 0x03)
-#define MEASURE_ADC_DELAY_MIN_MS    1U      /* Minimum delay */
+#define MEASURE_ADC_DELAY_MIN_MS    0U      /* Minimum delay */
 #define MEASURE_ADC_DELAY_MAX_MS    100U    /* Maximum delay */
-#define MEASURE_ADC_SW_STATES       600U    /* States per board (2×300) */
+#define MEASURE_ADC_FULL_HDR_SIZE   3U      /* mask (1B) + delay (2B) */
+#define MEASURE_ADC_PHASE_COUNT     6U      /* Number of timed phases */
+#define MEASURE_ADC_TIMING_SIZE     12U     /* 6 × uint16 = 12 bytes */
 #define SWITCH_ENABLE_TIME_US       3000U   /* ~3 ms per switch (calibrate on scope) */
-/* PWMPhaseSync (0x0A81) — response-wait, not included in timer */
 #define ADC_FULL_SCALE_V            20.48f    /* ±10.24V bipolar span */
 #define ADC_FULL_SCALE_CODES        262144.0f /* 2^18 total codes */
 ```
 
-**Example request** — Measure with 50 ms delay, enabling switch 42 on board 0 bank 0 to HVSG:
+**Example request** — Board 0 only, 0 ms delay, switch 42 on board 0 bank 0 to HVSG:
 
 ```
-Payload: [32 00] [00 00 00 2A 01]
-          ^^^^    ^^ ^^ ^^^^ ^^
-         50 ms   bid bank sw  HVSG
+Payload: [01] [00 00] [00 00 00 2A 01]
+          ^^   ^^^^    ^^ ^^ ^^^^ ^^
+        mask  0 ms    bid bank sw  HVSG
 ```
 
 ---

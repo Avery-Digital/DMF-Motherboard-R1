@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.3.0 — 2026-04-08
+
+### CMD_MEASURE_ADC — Board Mask, Phase Timing, Timeout Tuning
+- **Board mask**: New `board_mask` byte (bits 0-3) in request payload. Only masked boards are contacted — eliminates 200 ms timeout per missing board per phase.
+- **Request format**: `[board_mask][delay_lo][delay_hi][switch_groups...]` (was `[delay_lo][delay_hi][groups...]`)
+- **Per-phase timestamps**: Response now includes 6 × uint16 phase timings (Save, GND, Sync, Deterministic, Drain, Restore)
+- **Response format**: 422 bytes = `[s1][s2][Vpp(4B)][elapsed_ms(4B)][phase_ms×6(12B)][samples(400B)]` (was 410 bytes)
+- **PWM Sync timeout**: Reduced from DC_LIST_TIMEOUT (200 ms) to DC_RESPONSE_TIMEOUT (10 ms). PWMPhaseSync responds in ~1-2 ms.
+- **Fire-and-forget restore**: Phase 6 sends SET_LIST_OF_SW without waiting for response. Measurement is already captured.
+- **Delay minimum**: Changed from 1 ms to 0 ms. Timer still runs for `num_switches × 3 ms`.
+- **Performance**: 1 board / 1 switch / 0 ms delay → ~31 ms (was ~796 ms before board mask)
+
+### Bug Fix
+- **DC_MAX_BOARDS**: Changed from 1U to 4U — was causing "excess elements in array initializer" warnings and only using board 0
+- **burst_raw**: Removed unused debug array from `Command_ExecuteBurstADC()`
+
+---
+
 ## v1.2.0 — 2026-04-08
 
 ### CMD_MEASURE_ADC Optimization

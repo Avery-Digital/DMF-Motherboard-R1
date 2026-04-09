@@ -74,98 +74,93 @@ Note: SET_LIST request payload is 600 × 5 bytes = 3000 bytes. With escaping thi
 
 ---
 
-## CMD_MEASURE_ADC (0x0C03) — Full Sequence Timing
+## CMD_MEASURE_ADC (0x0C03) — Full Sequence Timing (v1.2.0+)
 
-### With N Connected Boards + M Empty Slots (DC_LIST_TIMEOUT = 200 ms)
+### Request Format
 
-#### Phase 1: Save Switch States (GET_ALL_SW × 4)
+```
+[board_mask][delay_lo][delay_hi][switch_groups...]
+```
 
-| Scenario | Time |
-|---|---|
-| 4 boards, all GND | 4 × 107 ms = **428 ms** |
-| 4 boards, all Float | 4 × 55 ms = **220 ms** |
-| 1 board GND + 3 empty | 107 ms + 3 × 200 ms = **707 ms** |
-| 0 boards | 4 × 200 ms = **800 ms** |
+- `board_mask`: bitmask bits 0-3 = boards 0-3 (only masked boards are contacted)
+- `delay_ms`: uint16 LE, clamped 1–100 ms
+- Switch groups: 5 bytes each `[boardID][bank][SW_hi][SW_lo][state]`
 
-#### Phase 2: Set All GND (0x0A02 × N connected)
+### Response Format (422 bytes)
 
-| Scenario | Time |
-|---|---|
-| 4 boards | 4 × 19 ms = **76 ms** |
-| 1 board | **19 ms** |
-| 0 boards | **0 ms** (skipped) |
+```
+Byte  0      status_1 (0x00=OK, 0x06=ADC error)
+Byte  1      status_2 (0x00=OK, 0x05=restore fail)
+Bytes 2-5    Vpp (IEEE 754 float, little-endian)
+Bytes 6-9    total_elapsed_ms (uint32 LE)
+Bytes 10-11  phase1_ms — Save HVSG (uint16 LE)
+Bytes 12-13  phase2_ms — GND HVSG (uint16 LE)
+Bytes 14-15  phase3_ms — PWM Sync (uint16 LE)
+Bytes 16-17  phase4_ms — Deterministic: timer + fire + burst ADC (uint16 LE)
+Bytes 18-19  phase5_ms — Drain fire responses (uint16 LE)
+Bytes 20-21  phase6_ms — Restore HVSG (uint16 LE)
+Bytes 22-421 100 × 4-byte ADC samples (little-endian)
+```
 
-#### Phase 3: Enable Measurement Switches (SET_LIST × N boards with switches)
+### Phase Timing Breakdown
 
-Depends on how many switches are specified. Typical case (1 board, 10 switches):
+| Phase | Operation | Per Board | Timeout | Notes |
+|---|---|---|---|---|
+| 1 — Save HVSG | GET_HVSG_SWITCHES (0x0B54) | Send + wait | DC_LIST_TIMEOUT (200 ms) | Returns only HVSG switches as 3-byte triplets (~50 bytes vs 603 for GET_ALL_SW) |
+| 2 — GND HVSG | SET_LIST_OF_SW (0x0B51) | Send + wait | DC_LIST_TIMEOUT (200 ms) | Selectively grounds only saved HVSG switches |
+| 3 — PWM Sync | PWMPhaseSync (0x0A81) | Send + wait | DC_RESPONSE_TIMEOUT (10 ms) | Resets TIM2/TIM1/TIM8 on driver board. Fast response (~1-2 ms) |
+| 4 — Deterministic | TIM2 one-pulse + fire + burst ADC | N/A | Timer-controlled | Timer: `(num_switches × 3000 µs) + (delay_ms × 1000 µs)`. Fire: SET_LIST_OF_SW (no wait). ADC: 100 × SPI read (~0.3 ms) |
+| 5 — Drain | Wait for Phase 4 responses | Per board | DC_LIST_TIMEOUT (200 ms) | Consumes stale SET_LIST_OF_SW responses |
+| 6 — Restore | SET_LIST_OF_SW (0x0B51) | Send only | N/A (fire-and-forget) | Restores saved switches to HVSG. No response wait — measurement already captured |
 
-| Scenario | Time |
-|---|---|
-| 1 board, 10 switches (50 bytes payload) | ~10 ms |
-| 1 board, 100 switches (500 bytes payload) | ~60 ms |
+### Board Mask Impact
 
-#### Phase 4: Deterministic Wait (TIM6)
+Boards not in `board_mask` are skipped in all phases. No UART traffic, no timeouts.
 
-Configurable: 1–100 ms (set by GUI)
+| Boards Connected | Mask | Timeout Waste (old) | Timeout Waste (new) |
+|---|---|---|---|
+| 1 of 4 | 0x01 | 3 × 200 ms × 5 phases = **3000 ms** | **0 ms** |
+| 2 of 4 | 0x03 | 2 × 200 ms × 5 phases = **2000 ms** | **0 ms** |
+| 3 of 4 | 0x07 | 1 × 200 ms × 5 phases = **1000 ms** | **0 ms** |
+| 4 of 4 | 0x0F | 0 ms | **0 ms** |
 
-#### Phase 5: ADC Burst Read (100 samples via SPI)
+### Estimated Totals
 
-~0.3 ms (100 × 3 µs per SPI read)
+#### 1 board, 1 switch, 10 ms delay (mask=0x01)
 
-#### Phase 6: Restore (AllGND + SET_LIST × N connected)
+| Phase | Time | Notes |
+|---|---|---|
+| 1 — Save HVSG | ~5 ms | GET_HVSG_SWITCHES: small response (~10 bytes) |
+| 2 — GND HVSG | ~5 ms | SET_LIST_OF_SW with few entries |
+| 3 — PWM Sync | ~2 ms | Fast response, 10 ms timeout |
+| 4 — Deterministic | ~13 ms | (1 × 3 ms) + 10 ms delay + 0.3 ms ADC |
+| 5 — Drain | ~5 ms | 1 response to consume |
+| 6 — Restore | ~1 ms | Fire-and-forget |
+| **Total** | **~31 ms** | **Was ~796 ms before board mask** |
 
-Similar to Phase 2 + Phase 3:
+#### 4 boards, 10 switches each, 50 ms delay (mask=0x0F)
 
-| Scenario | Time |
-|---|---|
-| 4 boards, restore 100 non-GND switches each | 4 × (19 + 60) ms = **316 ms** |
-| 1 board, 50 non-GND switches | 19 + 30 ms = **49 ms** |
+| Phase | Time | Notes |
+|---|---|---|
+| 1 — Save HVSG | ~20 ms | 4 × ~5 ms |
+| 2 — GND HVSG | ~20 ms | 4 × ~5 ms |
+| 3 — PWM Sync | ~8 ms | 4 × ~2 ms |
+| 4 — Deterministic | ~80 ms | (10 × 3 ms) + 50 ms + 0.3 ms |
+| 5 — Drain | ~20 ms | 4 responses |
+| 6 — Restore | ~4 ms | 4 × fire-and-forget |
+| **Total** | **~152 ms** |
 
-#### Phase 7: Vpp Calculation + Response
+#### 4 boards, 100 switches each, 100 ms delay (mask=0x0F)
 
-~1 ms (CPU float math + 406-byte response TX)
-
----
-
-## Total CMD_MEASURE_ADC Estimates
-
-### Best Case: 0 boards connected, 10 ms delay
-
-| Phase | Time |
-|---|---|
-| Phase 1 (save) | 800 ms (4 × 200 ms timeout) |
-| Phase 2–3 (GND + set) | 0 ms (skipped) |
-| Phase 4 (delay) | 10 ms |
-| Phase 5 (ADC) | 0.3 ms |
-| Phase 6 (restore) | 0 ms (skipped) |
-| Phase 7 (response) | 1 ms |
-| **Total** | **~811 ms** |
-
-### Typical Case: 1 board (GND state), 10 switches, 10 ms delay
-
-| Phase | Time |
-|---|---|
-| Phase 1 (save) | 107 ms + 3 × 200 ms = 707 ms |
-| Phase 2 (GND) | 19 ms |
-| Phase 3 (set 10 switches) | 10 ms |
-| Phase 4 (delay) | 10 ms |
-| Phase 5 (ADC) | 0.3 ms |
-| Phase 6 (restore) | 49 ms |
-| Phase 7 (response) | 1 ms |
-| **Total** | **~796 ms** |
-
-### Worst Case: 4 boards (all GND), 600 switches each, 100 ms delay
-
-| Phase | Time |
-|---|---|
-| Phase 1 (save) | 428 ms |
-| Phase 2 (GND) | 76 ms |
-| Phase 3 (set 600 switches × 4) | 1120 ms |
-| Phase 4 (delay) | 100 ms |
-| Phase 5 (ADC) | 0.3 ms |
-| Phase 6 (restore 600 × 4) | 1196 ms |
-| Phase 7 (response) | 1 ms |
-| **Total** | **~2921 ms (~3 seconds)** |
+| Phase | Time | Notes |
+|---|---|---|
+| 1 — Save HVSG | ~40 ms | 4 × ~10 ms (larger HVSG lists) |
+| 2 — GND HVSG | ~80 ms | 4 × ~20 ms (more SET_LIST entries) |
+| 3 — PWM Sync | ~8 ms | 4 × ~2 ms |
+| 4 — Deterministic | ~400 ms | (100 × 3 ms) + 100 ms + 0.3 ms |
+| 5 — Drain | ~20 ms | 4 responses |
+| 6 — Restore | ~4 ms | 4 × fire-and-forget |
+| **Total** | **~552 ms** |
 
 ---
 
