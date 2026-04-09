@@ -177,6 +177,15 @@ CFG_SEL0 = SCL line (idles high via pull-up). Combined: CFG_SEL[2:1:0] = 1,0,1 �
 |-------|----------|----------|-------------|
 | 31 | PH0 | HSE_OSC_IN | 12 MHz crystal |
 
+### PWM Phase Sync — GPIO Outputs (v1.3.1)
+
+| Pin # | Port.Pin | Function | Direction | Config | Connected To |
+|-------|----------|----------|-----------|--------|-------------|
+| 131 | PA12 | PWM_SYNC_1 | Output | Push-pull, Very High speed | Daughtercard connector 1 (DC1/DC2) — resets TIM2/TIM1/TIM8 on driver boards |
+| 54 | PC5 | PWM_SYNC_2 | Output | Push-pull, Very High speed | Daughtercard connector 2 (DC3/DC4) — resets TIM2/TIM1/TIM8 on driver boards |
+
+A brief GPIO pulse (~100 ns) on these pins triggers a simultaneous PWM counter reset on all connected driver boards. This replaces the UART-based PWMPhaseSync (0x0A81) command for CMD_MEASURE_ADC Phase 3.
+
 ### Debug Interface (SWD)
 
 | Pin # | Port.Pin | Function | Notes |
@@ -203,9 +212,9 @@ Refer to the STM32H735 datasheet Table 10 (Alternate Function mapping) for the c
 
 | Port | Peripherals Using It |
 |------|---------------------|
-| GPIOA | SPI2_SCK (PA9), USART2_TX (PA2), USART2_RX (PA3) |
+| GPIOA | SPI2_SCK (PA9), USART2_TX (PA2), USART2_RX (PA3), PWM_SYNC_1 (PA12) |
 | GPIOB | I2C1_SDA (PB7), I2C1_SCL (PB8), UART5_RX (PB5), UART5_TX (PB6), USART1_TX (PB14), USART1_RX (PB15), USART3_TX (PB10), USART3_RX (PB11) |
-| GPIOC | SPI2_MISO (PC2), SPI2_MOSI (PC3), USART6_TX (PC6), USART6_RX (PC7), ACT1 DE (PC8), UART4_TX (PC10), UART4_RX (PC11), USB2517 RESET_N (PC13) |
+| GPIOC | SPI2_MISO (PC2), SPI2_MOSI (PC3), PWM_SYNC_2 (PC5), USART6_TX (PC6), USART6_RX (PC7), ACT1 DE (PC8), UART4_TX (PC10), UART4_RX (PC11), USB2517 RESET_N (PC13) |
 | GPIOD | Chip selects PD0-PD6 (DRV8702 x3, DAC80508, ADS7066 x3), VN5T016AH DAUGHTER_2 (PD14) |
 | GPIOE | ADC CNV (PE12), ADC BUSY (PE15), DRV8702 PH/EN (PE9/11/13/14), VN5T016AH (PE6/7/8/10) |
 | GPIOF | USART7 RX/TX (PF6/7), RS485 DE/RE (PF8), DRV8702 nSLEEP/MODE/nFAULT (PF0-2, PF12-14) |

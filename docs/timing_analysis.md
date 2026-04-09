@@ -108,7 +108,7 @@ Bytes 22-421 100 × 4-byte ADC samples (little-endian)
 |---|---|---|---|---|
 | 1 — Save HVSG | GET_HVSG_SWITCHES (0x0B54) | Send + wait | DC_LIST_TIMEOUT (200 ms) | Returns only HVSG switches as 3-byte triplets (~50 bytes vs 603 for GET_ALL_SW) |
 | 2 — GND HVSG | SET_LIST_OF_SW (0x0B51) | Send + wait | DC_LIST_TIMEOUT (200 ms) | Selectively grounds only saved HVSG switches |
-| 3 — PWM Sync | PWMPhaseSync (0x0A81) | Send + wait | DC_RESPONSE_TIMEOUT (10 ms) | Resets TIM2/TIM1/TIM8 on driver board. Fast response (~1-2 ms) |
+| 3 — PWM Sync | GPIO pulse (PA12/PC5) | ~100 ns | N/A | Hardware GPIO pulse resets TIM2/TIM1/TIM8 on all driver boards simultaneously. Replaces UART PWMPhaseSync (0x0A81) as of v1.3.1 |
 | 4 — Deterministic | TIM2 one-pulse + fire + burst ADC | N/A | Timer-controlled | Timer: `(num_switches × 3000 µs) + (delay_ms × 1000 µs)`. Fire: SET_LIST_OF_SW (no wait). ADC: 100 × SPI read (~0.3 ms) |
 | 5 — Drain | Wait for Phase 4 responses | Per board | DC_LIST_TIMEOUT (200 ms) | Consumes stale SET_LIST_OF_SW responses |
 | 6 — Restore | SET_LIST_OF_SW (0x0B51) | Send only | N/A (fire-and-forget) | Restores saved switches to HVSG. No response wait — measurement already captured |
@@ -132,11 +132,11 @@ Boards not in `board_mask` are skipped in all phases. No UART traffic, no timeou
 |---|---|---|
 | 1 — Save HVSG | ~5 ms | GET_HVSG_SWITCHES: small response (~10 bytes) |
 | 2 — GND HVSG | ~5 ms | SET_LIST_OF_SW with few entries |
-| 3 — PWM Sync | ~2 ms | Fast response, 10 ms timeout |
+| 3 — PWM Sync | ~0 ms | GPIO pulse (~100 ns), no UART round-trip (v1.3.1) |
 | 4 — Deterministic | ~13 ms | (1 × 3 ms) + 10 ms delay + 0.3 ms ADC |
 | 5 — Drain | ~5 ms | 1 response to consume |
 | 6 — Restore | ~1 ms | Fire-and-forget |
-| **Total** | **~31 ms** | **Was ~796 ms before board mask** |
+| **Total** | **~29 ms** | **Was ~796 ms before board mask** |
 
 #### 4 boards, 10 switches each, 50 ms delay (mask=0x0F)
 
@@ -144,11 +144,11 @@ Boards not in `board_mask` are skipped in all phases. No UART traffic, no timeou
 |---|---|---|
 | 1 — Save HVSG | ~20 ms | 4 × ~5 ms |
 | 2 — GND HVSG | ~20 ms | 4 × ~5 ms |
-| 3 — PWM Sync | ~8 ms | 4 × ~2 ms |
+| 3 — PWM Sync | ~0 ms | GPIO pulse (~100 ns), all boards simultaneous (v1.3.1) |
 | 4 — Deterministic | ~80 ms | (10 × 3 ms) + 50 ms + 0.3 ms |
 | 5 — Drain | ~20 ms | 4 responses |
 | 6 — Restore | ~4 ms | 4 × fire-and-forget |
-| **Total** | **~152 ms** |
+| **Total** | **~144 ms** |
 
 #### 4 boards, 100 switches each, 100 ms delay (mask=0x0F)
 
@@ -156,11 +156,11 @@ Boards not in `board_mask` are skipped in all phases. No UART traffic, no timeou
 |---|---|---|
 | 1 — Save HVSG | ~40 ms | 4 × ~10 ms (larger HVSG lists) |
 | 2 — GND HVSG | ~80 ms | 4 × ~20 ms (more SET_LIST entries) |
-| 3 — PWM Sync | ~8 ms | 4 × ~2 ms |
+| 3 — PWM Sync | ~0 ms | GPIO pulse (~100 ns), all boards simultaneous (v1.3.1) |
 | 4 — Deterministic | ~400 ms | (100 × 3 ms) + 100 ms + 0.3 ms |
 | 5 — Drain | ~20 ms | 4 responses |
 | 6 — Restore | ~4 ms | 4 × fire-and-forget |
-| **Total** | **~552 ms** |
+| **Total** | **~544 ms** |
 
 ---
 

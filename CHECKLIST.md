@@ -5,6 +5,7 @@
 - [x] CMD_READ_ADC (0x0C01) — single read
 - [x] CMD_BURST_ADC (0x0C02) — 100-sample burst
 - [x] CMD_MEASURE_ADC (0x0C03) — switch-controlled deterministic measurement
+- [x] GPIO PWM phase sync (v1.3.1) — PA12/PC5 hardware pulse replaces UART PWMPhaseSync
 - [x] GUI burst plot with ScottPlot
 - [x] Bipolar ±10.24V conversion in GUI
 - [x] Works with or without driver boards plugged in

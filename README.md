@@ -222,7 +222,7 @@ See [docs/packet_protocol.md](docs/packet_protocol.md) for the full specificatio
 | `CMD_PING` | `0xDEAD` | (ignored) | 8 bytes: `DE AD BE EF 01 02 03 04` | ISR → deferred TX |
 | `CMD_READ_ADC` | `0x0C01` | (none) | 4 bytes: 18-bit ADC result, LE | ISR → deferred TX |
 | `CMD_BURST_ADC` | `0x0C02` | (none) | 400 bytes: 100 x 4-byte LE samples | ISR → deferred burst + TX |
-| `CMD_MEASURE_ADC` | `0x0C03` | 1B board_mask + 2B delay (ms LE) + 5B switch groups | 422 bytes: status + Vpp + elapsed + 6 phase times + 100 ADC samples | ISR → deferred measure (TIM2 + SPI2) |
+| `CMD_MEASURE_ADC` | `0x0C03` | 1B board_mask + 2B delay (ms LE) + 5B switch groups | 422 bytes: status + Vpp + elapsed + 6 phase times + 100 ADC samples | ISR → deferred measure (TIM2 + SPI2). v1.3.1: Phase 3 uses GPIO pulse (PA12/PC5) for PWM sync instead of UART |
 | `CMD_LOAD_*` | `0x0C10`–`0x0C19` | 1 byte: 0x01=ON, 0x00=OFF (or empty for query) | 1 byte: state (0x01/0x00) | ISR → deferred TX |
 | `CMD_THERM1`–`CMD_THERM6` | `0x0C20`–`0x0C25` | (none) | 4 bytes: float temperature (°C) | ISR → deferred TX |
 | `CMD_GANTRY_CMD` | `0x0C30` | ASCII command string | ASCII response (or "TIMEOUT") | ISR → deferred RS485 TX/RX |

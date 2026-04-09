@@ -146,13 +146,13 @@ Minimum payload: 8 bytes (1-byte mask + 2-byte delay + one 5-byte switch group).
 2. **Main loop stage** (`Command_ExecuteMeasureADC`): Executes the 7-phase blocking sequence (boards not in `board_mask` are skipped in all phases):
    - Phase 1: GET_HVSG_SWITCHES (0x0B54) → save only HVSG switch triplets (~50 bytes vs 603)
    - Phase 2: Selectively GND only the saved HVSG switches via SET_LIST_OF_SW
-   - Phase 3: PWMPhaseSync (0x0A81) — wait for response (10 ms timeout). Confirms TIM2/TIM1/TIM8 counters reset on driver board
+   - Phase 3: GPIO PWM phase sync — a hardware pulse on PA12/PC5 (~100 ns) resets TIM2/TIM1/TIM8 counters on all connected driver boards simultaneously. No UART round-trip required (v1.3.1). Note: the UART PWMPhaseSync command (0x0A81) still exists on the driver board but is no longer used by CMD_MEASURE_ADC
    - Phase 4: Start TIM2, fire SET_LIST_OF_SW (no wait), spin until timer expires, burst ADC read. Timer = `(num_switches × 3000 µs) + (delay_ms × 1000 µs)`. PSC=23 → 100 ns ticks, 32-bit, max ~429 seconds
    - Phase 5: Drain stale Phase 4 responses (200 ms timeout per board)
    - Phase 6: Restore saved switches to HVSG via SET_LIST_OF_SW (fire-and-forget, no response wait)
    - Phase 7: Vpp calculation + phase timing + response via `tx_request`
 
-**Deterministic timing:** PWMPhaseSync is sent and the motherboard waits for the response, confirming the driver board's TIM2/TIM1/TIM8 counters are reset to zero. TIM2 starts AFTER this confirmation, so it is locked to the actual PWM counter reset. Resolution is 100 ns.
+**Deterministic timing (v1.3.1+):** A GPIO pulse on PA12/PC5 resets all driver board PWM counters (TIM2/TIM1/TIM8) simultaneously via hardware. TIM2 starts immediately after the pulse, so it is locked to the actual PWM counter reset with ~100 ns precision. This replaces the previous UART-based PWMPhaseSync (0x0A81) which required ~2 ms per board for a serial round-trip.
 
 **Error handling:** If GET_HVSG_SWITCHES fails (Phase 1 timeout), that board is skipped in all subsequent phases. If Phase 2 times out, `error_occurred` is set. Phase 6 is fire-and-forget — measurement is already captured. Response status indicates `STATUS_ADC_RESTORE_FAIL` if any phase had an error.
 

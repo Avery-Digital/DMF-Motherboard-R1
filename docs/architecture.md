@@ -290,10 +290,11 @@ Command_ExecuteMeasureADC()          ← main loop context (blocking)
     │     DC_Uart_SendPacket(AllGND 0x0A02)
     │     Poll dc_response.ready
     │
-    │ Phase 3: PWM phase sync (synchronous)
-    │   for each board with switches:
-    │     DC_Uart_SendPacket(PWMPhaseSync 0x0A81)
-    │     Wait for dc_response.ready  ← confirms TIM2/1/8 reset
+    │ Phase 3: PWM phase sync (GPIO hardware — v1.3.1)
+    │   Pulse PA12 HIGH then LOW (~100 ns) → connector 1 (DC1/DC2)
+    │   Pulse PC5  HIGH then LOW (~100 ns) → connector 2 (DC3/DC4)
+    │   All driver board TIM2/TIM1/TIM8 counters reset simultaneously
+    │   (Replaces UART PWMPhaseSync 0x0A81 — no serial round-trip)
     │
     │ Phase 4: Timer-first switch enable
     │   total_us = num_switches × 3000 + delay_ms × 1000
