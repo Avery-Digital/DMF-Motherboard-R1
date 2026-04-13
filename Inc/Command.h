@@ -39,8 +39,8 @@ extern "C" {
 
 /* Firmware version */
 #define FW_VERSION_MAJOR    1U
-#define FW_VERSION_MINOR    4U
-#define FW_VERSION_PATCH    2U
+#define FW_VERSION_MINOR    5U
+#define FW_VERSION_PATCH    0U
 #define CMD_READ_ADC        CMD_CODE(0x0C, 0x01)    /**< Read LTC2338-18 ADC     */
 #define CMD_BURST_ADC       CMD_CODE(0x0C, 0x02)    /**< Burst 100x ADC reads    */
 #define CMD_MEASURE_ADC     CMD_CODE(0x0C, 0x03)    /**< Switch-controlled ADC   */
@@ -112,6 +112,26 @@ extern "C" {
 /* VN5T016AH current sense ADC constants */
 #define CSENSE_VREF          2.5f       /**< ADS7066 internal reference (V)      */
 #define CSENSE_ADC_CODES     65536.0f   /**< ADS7066 16-bit full scale           */
+
+/* ---- TEC Control Commands (0x0C50–0x0C5F) ----
+ *
+ *  Manual TEC H-bridge control via DRV8702 + PWM.
+ *  Each command takes [tec_id (1 byte): 1–3] in payload.
+ *
+ *  CMD_TEC_SET: [tec_id][direction][duty_pct]
+ *    direction: 0=OFF, 1=HEAT, 2=COOL
+ *    duty_pct:  0–100
+ *
+ *  CMD_TEC_GET: [tec_id]
+ *    Response: [s1][s2][tec_id][direction][duty_pct][fault]
+ *
+ *  CMD_TEC_STOP: [tec_id]   — set to OFF, 0%
+ *  CMD_TEC_STOP_ALL: (no payload) — all TECs off
+ */
+#define CMD_TEC_SET         CMD_CODE(0x0C, 0x50)    /**< Set TEC dir + duty      */
+#define CMD_TEC_GET         CMD_CODE(0x0C, 0x51)    /**< Get TEC state           */
+#define CMD_TEC_STOP        CMD_CODE(0x0C, 0x52)    /**< Stop single TEC         */
+#define CMD_TEC_STOP_ALL    CMD_CODE(0x0C, 0x53)    /**< Stop all TECs           */
 
 #define GANTRY_RESPONSE_MAX  128U   /**< Max ASCII response bytes from gantry */
 #define GANTRY_TIMEOUT_MS    500U   /**< RS485 response timeout               */

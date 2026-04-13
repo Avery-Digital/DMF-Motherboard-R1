@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.5.0 — 2026-04-13
+
+### TEC Manual Control via PWM (0x0C50–0x0C53)
+- New TEC_PWM module (TEC_PWM.c/h) — TIM1/TIM8 PWM for DRV8702 H-bridge
+- DRV8702 dual half-bridges (GH1/GL1 + GH2/GL2) form full H-bridge per chip
+- Direction: PWM on IN1 = heat, PWM on IN2 = cool, both LOW = off
+- Timer: TEC1 (TIM1 CH1+CH2), TEC2 (TIM1 CH3+CH4), TEC3 (TIM8 CH1+CH2)
+- Pins: PE9/PE11 (AF1), PE13/PE14 (AF1), PJ8/PJ10 (AF3)
+- Default 20 kHz, 0–100% duty per TEC
+- Commands: SET (0x0C50), GET (0x0C51), STOP (0x0C52), STOP_ALL (0x0C53)
+
+---
+
 ## v1.4.2 — 2026-04-13
 
 ### Load Switch Current Sense — Return V_SENSE in mV

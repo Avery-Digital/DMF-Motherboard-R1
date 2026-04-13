@@ -35,6 +35,7 @@
 #include "main.h"
 #include "command.h"
 #include "DRV8702.h"
+#include "TEC_PWM.h"
 #include "DAC80508.h"
 #include "ADS7066.h"
 #include "VN5T016AH.h"
@@ -310,6 +311,11 @@ static void SystemInit_Sequence(void)
         Error_Handler(0x32);
     }
     DRV8702_Wake(&drv8702_3_handle);
+
+    /* Step 5a: TEC PWM — TIM1/TIM8 for DRV8702 H-bridge IN1/IN2 pins.
+     *          Reconfigures IN1/IN2 from GPIO to AF mode for PWM.
+     *          All TECs start at 0% duty (off). 20 kHz default. */
+    TEC_PWM_Init(TEC_PWM_DEFAULT_FREQ_HZ);
 
     /* Step 6a: DAC80508 — 8-channel 16-bit DAC on SPI2.
      *          nCS on PD2 (already driven HIGH by the bulk chip-select init).

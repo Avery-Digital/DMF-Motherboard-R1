@@ -26,6 +26,8 @@
 #include <string.h>
 #include "Thermistor.h"
 #include "RS485_Driver.h"
+#include "TEC_PWM.h"
+#include "DRV8702.h"
 
 /* Private handler prototypes ------------------------------------------------*/
 static void Command_HandlePing(USART_Handle *handle,
@@ -84,6 +86,17 @@ static void Command_HandleSweepADC(USART_Handle *handle,
                                     const PacketHeader *header,
                                     const uint8_t *payload);
 
+static void Command_HandleTecSet(const PacketHeader *header,
+                                  const uint8_t *payload);
+
+static void Command_HandleTecGet(const PacketHeader *header,
+                                  const uint8_t *payload);
+
+static void Command_HandleTecStop(const PacketHeader *header,
+                                   const uint8_t *payload);
+
+static void Command_HandleTecStopAll(const PacketHeader *header);
+
 /* ==========================================================================
  *  COMMAND DISPATCH
  *
@@ -134,6 +147,20 @@ void Command_Dispatch(USART_Handle *handle,
         tx_request.pending = true;
         break;
     }
+
+    /* ---- TEC Control Commands (0x0C50–0x0C53) ---- */
+    case CMD_TEC_SET:
+        Command_HandleTecSet(header, payload);
+        break;
+    case CMD_TEC_GET:
+        Command_HandleTecGet(header, payload);
+        break;
+    case CMD_TEC_STOP:
+        Command_HandleTecStop(header, payload);
+        break;
+    case CMD_TEC_STOP_ALL:
+        Command_HandleTecStopAll(header);
+        break;
 
     /* ---- Load Switch Commands (0x0C10–0x0C19) ---- */
     case CMD_LOAD_VALVE1:
@@ -573,6 +600,143 @@ static void Command_HandleCurrentSense(USART_Handle *handle,
     tx_request.cmd2    = header->cmd2;
     memcpy(tx_request.payload, response, sizeof(response));
     tx_request.length  = sizeof(response);
+    tx_request.pending = true;
+}
+
+/* ==========================================================================
+ *  CMD_TEC_SET (0x0C50) — ISR context
+ *
+ *  Payload: [tec_id (1-3)] [direction (0=OFF,1=HEAT,2=COOL)] [duty_pct (0-100)]
+ *  Response: [status1][status2][tec_id][direction][duty_pct]
+ * ========================================================================== */
+static void Command_HandleTecSet(const PacketHeader *header,
+                                  const uint8_t *payload)
+{
+    uint8_t r[5] = { STATUS_CAT_OK, STATUS_CODE_OK, 0, 0, 0 };
+
+    if (header->length < 3U || payload == NULL) {
+        r[0] = STATUS_CAT_GENERAL;
+        r[1] = STATUS_PAYLOAD_SHORT;
+        goto reply;
+    }
+
+    uint8_t tec_id   = payload[0];
+    uint8_t dir      = payload[1];
+    uint8_t duty_pct = payload[2];
+
+    r[2] = tec_id;
+
+    if (tec_id < 1U || tec_id > TEC_COUNT || dir > 2U) {
+        r[0] = STATUS_CAT_GENERAL;
+        r[1] = STATUS_PAYLOAD_SHORT;
+        goto reply;
+    }
+
+    TEC_PWM_Set(tec_id, (TEC_Direction)dir, duty_pct);
+
+    /* Read back actual state */
+    TEC_Direction actual_dir;
+    uint8_t actual_duty;
+    TEC_PWM_Get(tec_id, &actual_dir, &actual_duty);
+    r[3] = (uint8_t)actual_dir;
+    r[4] = actual_duty;
+
+reply:
+    tx_request.msg1    = header->msg1;
+    tx_request.msg2    = header->msg2;
+    tx_request.cmd1    = header->cmd1;
+    tx_request.cmd2    = header->cmd2;
+    memcpy(tx_request.payload, r, sizeof(r));
+    tx_request.length  = sizeof(r);
+    tx_request.pending = true;
+}
+
+/* ==========================================================================
+ *  CMD_TEC_GET (0x0C51) — ISR context
+ *
+ *  Payload: [tec_id (1-3)]
+ *  Response: [status1][status2][tec_id][direction][duty_pct][fault]
+ * ========================================================================== */
+static void Command_HandleTecGet(const PacketHeader *header,
+                                  const uint8_t *payload)
+{
+    uint8_t r[6] = { STATUS_CAT_OK, STATUS_CODE_OK, 0, 0, 0, 0 };
+
+    if (header->length < 1U || payload == NULL) {
+        r[0] = STATUS_CAT_GENERAL;
+        r[1] = STATUS_PAYLOAD_SHORT;
+        goto reply;
+    }
+
+    uint8_t tec_id = payload[0];
+    r[2] = tec_id;
+
+    if (tec_id < 1U || tec_id > TEC_COUNT) {
+        r[0] = STATUS_CAT_GENERAL;
+        r[1] = STATUS_PAYLOAD_SHORT;
+        goto reply;
+    }
+
+    TEC_Direction dir;
+    uint8_t duty;
+    TEC_PWM_Get(tec_id, &dir, &duty);
+    r[3] = (uint8_t)dir;
+    r[4] = duty;
+
+    /* Check fault status from DRV8702 */
+    DRV8702_Handle *drv = NULL;
+    switch (tec_id) {
+    case 1: drv = &drv8702_1_handle; break;
+    case 2: drv = &drv8702_2_handle; break;
+    case 3: drv = &drv8702_3_handle; break;
+    }
+    r[5] = (drv != NULL && DRV8702_IsFaulted(drv)) ? 0x01U : 0x00U;
+
+reply:
+    tx_request.msg1    = header->msg1;
+    tx_request.msg2    = header->msg2;
+    tx_request.cmd1    = header->cmd1;
+    tx_request.cmd2    = header->cmd2;
+    memcpy(tx_request.payload, r, sizeof(r));
+    tx_request.length  = sizeof(r);
+    tx_request.pending = true;
+}
+
+/* ==========================================================================
+ *  CMD_TEC_STOP (0x0C52) — ISR context
+ * ========================================================================== */
+static void Command_HandleTecStop(const PacketHeader *header,
+                                   const uint8_t *payload)
+{
+    uint8_t r[2] = { STATUS_CAT_OK, STATUS_CODE_OK };
+
+    if (header->length >= 1U && payload != NULL) {
+        TEC_PWM_Stop(payload[0]);
+    }
+
+    tx_request.msg1    = header->msg1;
+    tx_request.msg2    = header->msg2;
+    tx_request.cmd1    = header->cmd1;
+    tx_request.cmd2    = header->cmd2;
+    memcpy(tx_request.payload, r, sizeof(r));
+    tx_request.length  = sizeof(r);
+    tx_request.pending = true;
+}
+
+/* ==========================================================================
+ *  CMD_TEC_STOP_ALL (0x0C53) — ISR context
+ * ========================================================================== */
+static void Command_HandleTecStopAll(const PacketHeader *header)
+{
+    TEC_PWM_StopAll();
+
+    uint8_t r[2] = { STATUS_CAT_OK, STATUS_CODE_OK };
+    tx_request.msg1    = header->msg1;
+    tx_request.msg2    = header->msg2;
+    tx_request.cmd1    = header->cmd1;
+    tx_request.cmd2    = header->cmd2;
+    memcpy(tx_request.payload, r, sizeof(r));
+    tx_request.length  = sizeof(r);
     tx_request.pending = true;
 }
 
