@@ -1,15 +1,26 @@
 # Changelog
 
+## v1.5.1 — 2026-04-13
+
+### TEC PWM Fix — Correct PH/EN Mode for DRV8702-Q1
+- **Part clarification**: Actual part is DRV8702-Q1 (full H-bridge), NOT DRV8702D-Q1 (half-bridge)
+- DRV8702-Q1 in PH/EN mode (MODE=0): PH=direction GPIO, EN=PWM for power
+- Reverted TEC_PWM from dual-channel (IN1+IN2 PWM) to single-channel (EN PWM only)
+- PH pins (PE9, PE13, PJ8) remain GPIO — direction set via DRV8702_SetDirection()
+- EN pins (PE11, PE14, PJ10) reconfigured to AF for timer PWM
+- Timer mapping: TEC1=TIM1_CH2, TEC2=TIM1_CH4, TEC3=TIM8_CH2
+- PH/EN truth table (from DRV8702-Q1 datasheet Table 7-3):
+  - PH=X, EN=LOW → brake (both low-side FETs on)
+  - PH=LOW, EN=HIGH → reverse (current SH2→SH1 = cool)
+  - PH=HIGH, EN=HIGH → forward (current SH1→SH2 = heat)
+
+---
+
 ## v1.5.0 — 2026-04-13
 
-### TEC Manual Control via PWM (0x0C50–0x0C53)
-- New TEC_PWM module (TEC_PWM.c/h) — TIM1/TIM8 PWM for DRV8702 H-bridge
-- DRV8702 dual half-bridges (GH1/GL1 + GH2/GL2) form full H-bridge per chip
-- Direction: PWM on IN1 = heat, PWM on IN2 = cool, both LOW = off
-- Timer: TEC1 (TIM1 CH1+CH2), TEC2 (TIM1 CH3+CH4), TEC3 (TIM8 CH1+CH2)
-- Pins: PE9/PE11 (AF1), PE13/PE14 (AF1), PJ8/PJ10 (AF3)
-- Default 20 kHz, 0–100% duty per TEC
+### TEC Manual Control Commands (0x0C50–0x0C53)
 - Commands: SET (0x0C50), GET (0x0C51), STOP (0x0C52), STOP_ALL (0x0C53)
+- Default 20 kHz PWM, 0–100% duty per TEC
 
 ---
 
