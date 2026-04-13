@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.4.2 — 2026-04-13
+
+### Load Switch Current Sense — Return V_SENSE in mV
+- Changed response from computed I_LOAD (mA) to raw V_SENSE (mV)
+- kILIS is non-linear with load current — raw sense voltage is more accurate
+- Removed CSENSE_KILIS and CSENSE_R_OHM constants (calibration done on host side)
+- Response format unchanged: `[status1][status2][v_sense_mV float LE (4B)]`
+
+---
+
 ## v1.4.1 — 2026-04-13
 
 ### Load Switch Current Sensing (0x0C40–0x0C49)

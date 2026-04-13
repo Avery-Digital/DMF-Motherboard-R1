@@ -525,15 +525,17 @@ static void Command_HandleThermistor(USART_Handle *handle,
 /* ==========================================================================
  *  LOAD SWITCH CURRENT SENSE (0x0C40–0x0C49) — ISR context
  *
- *  Reads load current via VN5T016AH CSENSE pin → 1 kΩ to GND → ADS7066.
+ *  Reads VN5T016AH CSENSE voltage via 1 kΩ to GND → ADS7066.
+ *  Returns V_SENSE in millivolts as a float.
  *
- *  Conversion:
- *    V_SENSE  = (ADC_code / 65536) × 2.5V
- *    I_SENSE  = V_SENSE / 1000 Ω
- *    I_LOAD   = I_SENSE × kILIS
- *    mA       = I_LOAD × 1000
+ *  V_SENSE is proportional to I_OUT:
+ *    I_SENSE = I_OUT / kILIS
+ *    V_SENSE = I_SENSE × 1 kΩ
  *
- *  Response: [status1][status2][current_mA float LE (4B)]
+ *  kILIS varies with load current (non-linear), so we return the raw
+ *  sense voltage and let the host apply calibration if needed.
+ *
+ *  Response: [status1][status2][v_sense_mV float LE (4B)]
  * ========================================================================== */
 static void Command_HandleCurrentSense(USART_Handle *handle,
                                         const PacketHeader *header,
@@ -545,7 +547,7 @@ static void Command_HandleCurrentSense(USART_Handle *handle,
     (void)payload;
 
     uint16_t adc_result = 0U;
-    float    current_mA;
+    float    v_sense_mV;
     uint8_t  response[6];  /* [status1][status2][4-byte float LE] */
 
     response[0] = STATUS_CAT_OK;
@@ -554,17 +556,16 @@ static void Command_HandleCurrentSense(USART_Handle *handle,
     ADS7066_Status status = ADS7066_ReadChannel(adc_handle, channel, &adc_result);
 
     if (status == ADS7066_OK) {
-        float v_sense = ((float)adc_result / CSENSE_ADC_CODES) * CSENSE_VREF;
-        float i_sense = v_sense / CSENSE_R_OHM;
-        current_mA    = i_sense * CSENSE_KILIS * 1000.0f;
+        /* V_SENSE in mV = (ADC / 65536) × 2500 mV */
+        v_sense_mV = ((float)adc_result / CSENSE_ADC_CODES) * (CSENSE_VREF * 1000.0f);
     } else {
         response[0] = STATUS_CAT_ADC;
         response[1] = STATUS_ADS_READ_FAIL;
         uint32_t nan_bits = 0x7FC00000U;
-        memcpy(&current_mA, &nan_bits, sizeof(current_mA));
+        memcpy(&v_sense_mV, &nan_bits, sizeof(v_sense_mV));
     }
 
-    memcpy(&response[2], &current_mA, sizeof(float));
+    memcpy(&response[2], &v_sense_mV, sizeof(float));
 
     tx_request.msg1    = header->msg1;
     tx_request.msg2    = header->msg2;

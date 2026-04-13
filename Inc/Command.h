@@ -40,7 +40,7 @@ extern "C" {
 /* Firmware version */
 #define FW_VERSION_MAJOR    1U
 #define FW_VERSION_MINOR    4U
-#define FW_VERSION_PATCH    1U
+#define FW_VERSION_PATCH    2U
 #define CMD_READ_ADC        CMD_CODE(0x0C, 0x01)    /**< Read LTC2338-18 ADC     */
 #define CMD_BURST_ADC       CMD_CODE(0x0C, 0x02)    /**< Burst 100x ADC reads    */
 #define CMD_MEASURE_ADC     CMD_CODE(0x0C, 0x03)    /**< Switch-controlled ADC   */
@@ -92,28 +92,25 @@ extern "C" {
 
 /* ---- Load Switch Current Sense Commands (0x0C40–0x0C49) ----
  *
- *  Read load current via VN5T016AH CSENSE pin → 1 kΩ → ADS7066.
- *  Response: [status1][status2][current_mA float LE (4B)]
+ *  Read VN5T016AH CSENSE voltage via 1 kΩ to GND → ADS7066.
+ *  Response: [status1][status2][v_sense_mV float LE (4B)]
  *
- *  Conversion: V_SENSE = (ADC / 65536) × VREF
- *              I_SENSE = V_SENSE / R_SENSE
- *              I_LOAD  = I_SENSE × kILIS
+ *  V_SENSE is proportional to I_OUT:  I_OUT = V_SENSE × kILIS / R_SENSE
+ *  kILIS varies with load current (non-linear), so raw mV is returned.
  */
-#define CMD_CURR_VALVE1     CMD_CODE(0x0C, 0x40)    /**< Valve 1 current         */
-#define CMD_CURR_VALVE2     CMD_CODE(0x0C, 0x41)    /**< Valve 2 current         */
-#define CMD_CURR_MICROPLATE CMD_CODE(0x0C, 0x42)    /**< Microplate current      */
-#define CMD_CURR_FAN        CMD_CODE(0x0C, 0x43)    /**< Fan current             */
-#define CMD_CURR_TEC1       CMD_CODE(0x0C, 0x44)    /**< TEC 1 current           */
-#define CMD_CURR_TEC2       CMD_CODE(0x0C, 0x45)    /**< TEC 2 current           */
-#define CMD_CURR_TEC3       CMD_CODE(0x0C, 0x46)    /**< TEC 3 current           */
-#define CMD_CURR_ASSEMBLY   CMD_CODE(0x0C, 0x47)    /**< Assembly station current */
-#define CMD_CURR_DAUGHTER1  CMD_CODE(0x0C, 0x48)    /**< Daughter board 1 current */
-#define CMD_CURR_DAUGHTER2  CMD_CODE(0x0C, 0x49)    /**< Daughter board 2 current */
+#define CMD_CURR_VALVE1     CMD_CODE(0x0C, 0x40)    /**< Valve 1 sense voltage   */
+#define CMD_CURR_VALVE2     CMD_CODE(0x0C, 0x41)    /**< Valve 2 sense voltage   */
+#define CMD_CURR_MICROPLATE CMD_CODE(0x0C, 0x42)    /**< Microplate sense voltage */
+#define CMD_CURR_FAN        CMD_CODE(0x0C, 0x43)    /**< Fan sense voltage       */
+#define CMD_CURR_TEC1       CMD_CODE(0x0C, 0x44)    /**< TEC 1 sense voltage     */
+#define CMD_CURR_TEC2       CMD_CODE(0x0C, 0x45)    /**< TEC 2 sense voltage     */
+#define CMD_CURR_TEC3       CMD_CODE(0x0C, 0x46)    /**< TEC 3 sense voltage     */
+#define CMD_CURR_ASSEMBLY   CMD_CODE(0x0C, 0x47)    /**< Assembly sense voltage  */
+#define CMD_CURR_DAUGHTER1  CMD_CODE(0x0C, 0x48)    /**< Daughter 1 sense voltage */
+#define CMD_CURR_DAUGHTER2  CMD_CODE(0x0C, 0x49)    /**< Daughter 2 sense voltage */
 
-/* VN5T016AH current sense constants */
-#define CSENSE_R_OHM        1000.0f     /**< Sense resistor: 1 kΩ to GND        */
-#define CSENSE_KILIS        1600.0f     /**< Typ sense ratio (calibrate later)   */
-#define CSENSE_VREF          2.5f       /**< ADS7066 internal reference          */
+/* VN5T016AH current sense ADC constants */
+#define CSENSE_VREF          2.5f       /**< ADS7066 internal reference (V)      */
 #define CSENSE_ADC_CODES     65536.0f   /**< ADS7066 16-bit full scale           */
 
 #define GANTRY_RESPONSE_MAX  128U   /**< Max ASCII response bytes from gantry */
