@@ -1,5 +1,29 @@
 # Changelog
 
+## v1.4.1 — 2026-04-13
+
+### Load Switch Current Sensing (0x0C40–0x0C49)
+- 10 new commands for reading load current via VN5T016AH CSENSE pin
+- Current sense path: CSENSE → 1 kΩ to GND → ADS7066 analog input
+- Response: `[status1][status2][current_mA float LE (4B)]`
+- Conversion: `V = (ADC/65536) × 2.5V`, `I_load = (V / 1kΩ) × kILIS × 1000 mA`
+- `CSENSE_KILIS = 1600` (typical, calibrate on hardware)
+
+| Command | Code | ADC Instance | Channel | Load |
+|---------|------|-------------|---------|------|
+| CMD_CURR_VALVE1 | 0x0C40 | Instance 2 (PD4) | AIN6 | Valve 1 |
+| CMD_CURR_VALVE2 | 0x0C41 | Instance 2 (PD4) | AIN7 | Valve 2 |
+| CMD_CURR_MICROPLATE | 0x0C42 | Instance 1 (PD5) | AIN2 | Microplate |
+| CMD_CURR_FAN | 0x0C43 | Instance 1 (PD5) | AIN3 | Fan |
+| CMD_CURR_TEC1 | 0x0C44 | Instance 2 (PD4) | AIN0 | TEC 1 |
+| CMD_CURR_TEC2 | 0x0C45 | Instance 2 (PD4) | AIN1 | TEC 2 |
+| CMD_CURR_TEC3 | 0x0C46 | Instance 1 (PD5) | AIN0 | TEC 3 |
+| CMD_CURR_ASSEMBLY | 0x0C47 | Instance 3 (PD3) | AIN6 | Assembly Station |
+| CMD_CURR_DAUGHTER1 | 0x0C48 | Instance 1 (PD5) | AIN4 | Daughter 1 |
+| CMD_CURR_DAUGHTER2 | 0x0C49 | Instance 1 (PD5) | AIN5 | Daughter 2 |
+
+---
+
 ## v1.4.0 — 2026-04-09
 
 ### CMD_SWEEP_ADC (0x0C05) — Per-Switch ADC Sweep

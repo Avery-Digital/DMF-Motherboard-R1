@@ -40,7 +40,7 @@ extern "C" {
 /* Firmware version */
 #define FW_VERSION_MAJOR    1U
 #define FW_VERSION_MINOR    4U
-#define FW_VERSION_PATCH    0U
+#define FW_VERSION_PATCH    1U
 #define CMD_READ_ADC        CMD_CODE(0x0C, 0x01)    /**< Read LTC2338-18 ADC     */
 #define CMD_BURST_ADC       CMD_CODE(0x0C, 0x02)    /**< Burst 100x ADC reads    */
 #define CMD_MEASURE_ADC     CMD_CODE(0x0C, 0x03)    /**< Switch-controlled ADC   */
@@ -89,6 +89,32 @@ extern "C" {
  *  Deferred to main loop (RS485 is polled, ~50 ms round trip at 9600).
  */
 #define CMD_GANTRY_CMD      CMD_CODE(0x0C, 0x30)    /**< Gantry RS485 passthrough */
+
+/* ---- Load Switch Current Sense Commands (0x0C40–0x0C49) ----
+ *
+ *  Read load current via VN5T016AH CSENSE pin → 1 kΩ → ADS7066.
+ *  Response: [status1][status2][current_mA float LE (4B)]
+ *
+ *  Conversion: V_SENSE = (ADC / 65536) × VREF
+ *              I_SENSE = V_SENSE / R_SENSE
+ *              I_LOAD  = I_SENSE × kILIS
+ */
+#define CMD_CURR_VALVE1     CMD_CODE(0x0C, 0x40)    /**< Valve 1 current         */
+#define CMD_CURR_VALVE2     CMD_CODE(0x0C, 0x41)    /**< Valve 2 current         */
+#define CMD_CURR_MICROPLATE CMD_CODE(0x0C, 0x42)    /**< Microplate current      */
+#define CMD_CURR_FAN        CMD_CODE(0x0C, 0x43)    /**< Fan current             */
+#define CMD_CURR_TEC1       CMD_CODE(0x0C, 0x44)    /**< TEC 1 current           */
+#define CMD_CURR_TEC2       CMD_CODE(0x0C, 0x45)    /**< TEC 2 current           */
+#define CMD_CURR_TEC3       CMD_CODE(0x0C, 0x46)    /**< TEC 3 current           */
+#define CMD_CURR_ASSEMBLY   CMD_CODE(0x0C, 0x47)    /**< Assembly station current */
+#define CMD_CURR_DAUGHTER1  CMD_CODE(0x0C, 0x48)    /**< Daughter board 1 current */
+#define CMD_CURR_DAUGHTER2  CMD_CODE(0x0C, 0x49)    /**< Daughter board 2 current */
+
+/* VN5T016AH current sense constants */
+#define CSENSE_R_OHM        1000.0f     /**< Sense resistor: 1 kΩ to GND        */
+#define CSENSE_KILIS        1600.0f     /**< Typ sense ratio (calibrate later)   */
+#define CSENSE_VREF          2.5f       /**< ADS7066 internal reference          */
+#define CSENSE_ADC_CODES     65536.0f   /**< ADS7066 16-bit full scale           */
 
 #define GANTRY_RESPONSE_MAX  128U   /**< Max ASCII response bytes from gantry */
 #define GANTRY_TIMEOUT_MS    500U   /**< RS485 response timeout               */

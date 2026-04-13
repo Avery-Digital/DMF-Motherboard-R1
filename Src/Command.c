@@ -50,6 +50,12 @@ static void Command_HandleThermistor(USART_Handle *handle,
                                       const uint8_t *payload,
                                       uint8_t channel);
 
+static void Command_HandleCurrentSense(USART_Handle *handle,
+                                        const PacketHeader *header,
+                                        const uint8_t *payload,
+                                        ADS7066_Handle *adc_handle,
+                                        uint8_t channel);
+
 static void Command_HandleGetBoardType(USART_Handle *handle,
                                         const PacketHeader *header,
                                         const uint8_t *payload);
@@ -179,6 +185,38 @@ void Command_Dispatch(USART_Handle *handle,
         break;
     case CMD_THERM6:
         Command_HandleThermistor(handle, header, payload, 5);
+        break;
+
+    /* ---- Load Switch Current Sense (0x0C40–0x0C49) ---- */
+    case CMD_CURR_VALVE1:
+        Command_HandleCurrentSense(handle, header, payload, &ads7066_2_handle, 6);
+        break;
+    case CMD_CURR_VALVE2:
+        Command_HandleCurrentSense(handle, header, payload, &ads7066_2_handle, 7);
+        break;
+    case CMD_CURR_MICROPLATE:
+        Command_HandleCurrentSense(handle, header, payload, &ads7066_1_handle, 2);
+        break;
+    case CMD_CURR_FAN:
+        Command_HandleCurrentSense(handle, header, payload, &ads7066_1_handle, 3);
+        break;
+    case CMD_CURR_TEC1:
+        Command_HandleCurrentSense(handle, header, payload, &ads7066_2_handle, 0);
+        break;
+    case CMD_CURR_TEC2:
+        Command_HandleCurrentSense(handle, header, payload, &ads7066_2_handle, 1);
+        break;
+    case CMD_CURR_TEC3:
+        Command_HandleCurrentSense(handle, header, payload, &ads7066_1_handle, 0);
+        break;
+    case CMD_CURR_ASSEMBLY:
+        Command_HandleCurrentSense(handle, header, payload, &ads7066_3_handle, 6);
+        break;
+    case CMD_CURR_DAUGHTER1:
+        Command_HandleCurrentSense(handle, header, payload, &ads7066_1_handle, 4);
+        break;
+    case CMD_CURR_DAUGHTER2:
+        Command_HandleCurrentSense(handle, header, payload, &ads7066_1_handle, 5);
         break;
 
     /* ---- Gantry RS485 Passthrough (0x0C30) ---- */
@@ -474,6 +512,59 @@ static void Command_HandleThermistor(USART_Handle *handle,
     }
 
     memcpy(&response[2], &temp_c, sizeof(float));
+
+    tx_request.msg1    = header->msg1;
+    tx_request.msg2    = header->msg2;
+    tx_request.cmd1    = header->cmd1;
+    tx_request.cmd2    = header->cmd2;
+    memcpy(tx_request.payload, response, sizeof(response));
+    tx_request.length  = sizeof(response);
+    tx_request.pending = true;
+}
+
+/* ==========================================================================
+ *  LOAD SWITCH CURRENT SENSE (0x0C40–0x0C49) — ISR context
+ *
+ *  Reads load current via VN5T016AH CSENSE pin → 1 kΩ to GND → ADS7066.
+ *
+ *  Conversion:
+ *    V_SENSE  = (ADC_code / 65536) × 2.5V
+ *    I_SENSE  = V_SENSE / 1000 Ω
+ *    I_LOAD   = I_SENSE × kILIS
+ *    mA       = I_LOAD × 1000
+ *
+ *  Response: [status1][status2][current_mA float LE (4B)]
+ * ========================================================================== */
+static void Command_HandleCurrentSense(USART_Handle *handle,
+                                        const PacketHeader *header,
+                                        const uint8_t *payload,
+                                        ADS7066_Handle *adc_handle,
+                                        uint8_t channel)
+{
+    (void)handle;
+    (void)payload;
+
+    uint16_t adc_result = 0U;
+    float    current_mA;
+    uint8_t  response[6];  /* [status1][status2][4-byte float LE] */
+
+    response[0] = STATUS_CAT_OK;
+    response[1] = STATUS_CODE_OK;
+
+    ADS7066_Status status = ADS7066_ReadChannel(adc_handle, channel, &adc_result);
+
+    if (status == ADS7066_OK) {
+        float v_sense = ((float)adc_result / CSENSE_ADC_CODES) * CSENSE_VREF;
+        float i_sense = v_sense / CSENSE_R_OHM;
+        current_mA    = i_sense * CSENSE_KILIS * 1000.0f;
+    } else {
+        response[0] = STATUS_CAT_ADC;
+        response[1] = STATUS_ADS_READ_FAIL;
+        uint32_t nan_bits = 0x7FC00000U;
+        memcpy(&current_mA, &nan_bits, sizeof(current_mA));
+    }
+
+    memcpy(&response[2], &current_mA, sizeof(float));
 
     tx_request.msg1    = header->msg1;
     tx_request.msg2    = header->msg2;
