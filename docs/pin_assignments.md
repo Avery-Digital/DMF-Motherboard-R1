@@ -102,7 +102,7 @@ All configured as push-pull outputs, High speed, initialized HIGH (deasserted).
 | 144 | PD1 | nSCS | Output | Push-pull, High speed | SPI chip select (active low) |
 | 117 | PG7 | nFAULT | Input | Pull-up, Low speed | Fault indicator (active low) |
 
-**Note:** PE9 = TIM1_CH1 (AF1), PE11 = TIM1_CH2 (AF1) — available for PWM in future.
+**PWM:** PE11 is configured as TIM1_CH2 (AF1) for PWM output to the EN pin at 20 kHz (TEC manual control). PE9 (PH/direction) remains GPIO.
 
 ### DRV8702 TEC H-Bridge — Instance 2
 
@@ -115,6 +115,8 @@ All configured as push-pull outputs, High speed, initialized HIGH (deasserted).
 | — | PD0 | nSCS | Output | Push-pull, High speed | SPI chip select |
 | — | PF2 | nFAULT | Input | Pull-up, Low speed | Fault indicator |
 
+**PWM:** PE14 is configured as TIM1_CH4 (AF1) for PWM output to the EN pin at 20 kHz (TEC manual control). PE13 (PH/direction) remains GPIO.
+
 ### DRV8702 TEC H-Bridge — Instance 3
 
 | Pin # | Port.Pin | Function | Direction | Config | Signal |
@@ -125,6 +127,8 @@ All configured as push-pull outputs, High speed, initialized HIGH (deasserted).
 | — | PF13 | MODE | Output | Push-pull, Low speed | PH/EN vs PWM mode |
 | — | PD6 | nSCS | Output | Push-pull, High speed | SPI chip select |
 | — | PF14 | nFAULT | Input | Pull-up, Low speed | Fault indicator |
+
+**PWM:** PJ10 is configured as TIM8_CH2 (AF3) for PWM output to the EN pin at 20 kHz (TEC manual control). PJ8 (PH/direction) remains GPIO.
 
 ### DAC80508ZRTER — 8-Channel 16-bit DAC
 
@@ -200,6 +204,8 @@ A brief GPIO pulse (~100 ns) on these pins triggers a simultaneous PWM counter r
 
 | AF | Function |
 |----|----------|
+| AF1 | TIM1 (PE11 CH2, PE14 CH4 — TEC1/TEC2 EN PWM) |
+| AF3 | TIM8 (PJ10 CH2 — TEC3 EN PWM) |
 | AF4 | I2C1, USART10, USART1 |
 | AF5 | SPI2 |
 | AF7 | USART2, USART3, USART6, USART7 |

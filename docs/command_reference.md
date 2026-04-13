@@ -503,6 +503,135 @@ See [docs/thermistor.md](thermistor.md) for circuit details and conversion math.
 
 ---
 
+## CMD_CSENSE_* — Load Switch Current Sensing (`0x0C40`–`0x0C49`)
+
+**Purpose:** Read the CSENSE output voltage of a VN5T016AH high-side load switch via the ADS7066 slow ADC. The CSENSE pin provides a current-proportional voltage that can be used for overcurrent detection and power monitoring.
+
+### Command Codes
+
+| Command | Code | Load | ADS7066 Instance | CS Pin |
+|---------|------|------|------------------|--------|
+| `CMD_CSENSE_VALVE1` | `0x0C40` | Valve 1 | Instance 2 | PD4 |
+| `CMD_CSENSE_VALVE2` | `0x0C41` | Valve 2 | Instance 2 | PD4 |
+| `CMD_CSENSE_TEC1` | `0x0C42` | TEC 1 | Instance 2 | PD4 |
+| `CMD_CSENSE_TEC2` | `0x0C43` | TEC 2 | Instance 2 | PD4 |
+| `CMD_CSENSE_TEC3` | `0x0C44` | TEC 3 | Instance 1 | PD5 |
+| `CMD_CSENSE_MICROPLATE` | `0x0C45` | Microplate | Instance 1 | PD5 |
+| `CMD_CSENSE_FAN` | `0x0C46` | Fan | Instance 1 | PD5 |
+| `CMD_CSENSE_DAUGHTER1` | `0x0C47` | Daughter 1 | Instance 1 | PD5 |
+| `CMD_CSENSE_DAUGHTER2` | `0x0C48` | Daughter 2 | Instance 1 | PD5 |
+| `CMD_CSENSE_ASSEMBLY` | `0x0C49` | Assembly | Instance 3 | PD3 |
+
+### Channel Mapping Summary
+
+| ADS7066 Instance | CS Pin | Loads |
+|------------------|--------|-------|
+| Instance 2 | PD4 | Valve1, Valve2, TEC1, TEC2 |
+| Instance 1 | PD5 | TEC3, Microplate, Fan, Daughter1, Daughter2 |
+| Instance 3 | PD3 | Assembly |
+
+### Request Payload
+
+None (length = 0).
+
+### Response Payload
+
+4 bytes, IEEE 754 little-endian float — V_SENSE in millivolts (mV).
+
+| Byte | Content |
+|------|---------|
+| 0–3 | V_SENSE in mV (IEEE 754 float, LE) |
+
+Returns `NaN` (0x7FC00000) if the ADC read fails.
+
+**Response header:** Echoes back the request's msg1, msg2, cmd1, cmd2.
+
+**Execution context:** ISR → deferred TX via `tx_request`.
+
+---
+
+## CMD_TEC_* — TEC Manual PWM Control (`0x0C50`–`0x0C54`)
+
+**Purpose:** Manual PWM control of the 3 TEC H-bridges (DRV8702-Q1, full H-bridge with 4 FETs). The DRV8702-Q1 operates in PH/EN mode (MODE pin = 0): PH (GPIO) sets direction, EN (timer PWM) controls duty cycle.
+
+**Important:** The part is the **DRV8702-Q1** (full H-bridge, 4 FETs), NOT the DRV8702D-Q1 (half-bridge, 2 FETs). This is a critical distinction for driver configuration and current handling.
+
+### Hardware Configuration
+
+| TEC | EN Pin | Timer | Channel | AF | PH Pin | nSLEEP | MODE |
+|-----|--------|-------|---------|----|--------|--------|------|
+| TEC1 | PE11 | TIM1 | CH2 | AF1 | PE9 | PG5 | PG6 (LOW=PH/EN) |
+| TEC2 | PE14 | TIM1 | CH4 | AF1 | PE13 | PF0 | PF1 (LOW=PH/EN) |
+| TEC3 | PJ10 | TIM8 | CH2 | AF3 | PJ8 | PF12 | PF13 (LOW=PH/EN) |
+
+Default PWM frequency: 20 kHz. The TEC_PWM.c/h module handles timer initialization and PWM output on the EN pins.
+
+### Command Codes
+
+| Command | Code | Description |
+|---------|------|-------------|
+| `CMD_TEC_SET` | `0x0C50` | Set TEC PWM duty cycle and direction |
+| `CMD_TEC_GET` | `0x0C51` | Get current TEC PWM state |
+| `CMD_TEC_STOP` | `0x0C52` | Stop PWM on one TEC (EN low) |
+| `CMD_TEC_STOP_ALL` | `0x0C53` | Stop PWM on all 3 TECs |
+| `CMD_TEC_RESET` | `0x0C54` | Full power-cycle reset of one TEC |
+
+### CMD_TEC_SET (`0x0C50`)
+
+**Request payload:**
+
+| Byte | Content |
+|------|---------|
+| 0 | TEC ID (0=TEC1, 1=TEC2, 2=TEC3) |
+| 1 | Direction (0 or 1, written to PH pin) |
+| 2–3 | Duty cycle (uint16 LE, 0–10000 = 0.00%–100.00%) |
+
+**Response payload:** 1 byte — `0x00` = success.
+
+### CMD_TEC_GET (`0x0C51`)
+
+**Request payload:** 1 byte — TEC ID (0–2).
+
+**Response payload:**
+
+| Byte | Content |
+|------|---------|
+| 0 | TEC ID |
+| 1 | Direction (current PH state) |
+| 2–3 | Duty cycle (uint16 LE, 0–10000) |
+| 4 | Running flag (0x01 = PWM active, 0x00 = stopped) |
+
+### CMD_TEC_STOP (`0x0C52`)
+
+**Request payload:** 1 byte — TEC ID (0–2).
+
+**Response payload:** 1 byte — `0x00` = success. Drives EN pin low (0% duty), stopping current flow.
+
+### CMD_TEC_STOP_ALL (`0x0C53`)
+
+**Request payload:** None.
+
+**Response payload:** 1 byte — `0x00` = success. Stops all 3 TECs.
+
+### CMD_TEC_RESET (`0x0C54`)
+
+**Request payload:** 1 byte — TEC ID (0–2).
+
+**Response payload:** 1 byte — `0x00` = success.
+
+**Reset sequence:**
+1. Stop PWM on EN pin
+2. Assert nSLEEP LOW (enter sleep mode)
+3. Delay (allow power rails to discharge)
+4. Deassert nSLEEP HIGH (wake — re-latches MODE=0 for PH/EN mode)
+5. Clear any latched faults via SPI
+
+This is a full power-cycle of the DRV8702-Q1, useful for recovering from fault conditions or ensuring a clean startup state.
+
+**Execution context:** All TEC commands are ISR → deferred TX via `tx_request`.
+
+---
+
 ## CMD_GANTRY_CMD — Gantry RS485 Passthrough (`0x0C30`)
 
 **Purpose:** Forward an ASCII command to the gantry system via RS485 (USART7 + MAX485) and return the response.
@@ -845,7 +974,7 @@ For a detailed trace of how commands and responses flow through every layer (ISR
 | `0x0Axx` | Driverboard switch/PMU/EHVG commands (routed to daughtercards) |
 | `0x0Bxx` | Driverboard bulk/query commands (routed to daughtercards) |
 | `0x0B99` | Board identification (intercepted by motherboard, not forwarded) |
-| `0x0Cxx` | Motherboard-local: ADC (0x0C01–0x0C02), load switches (0x0C10–0x0C19), thermistors (0x0C20–0x0C25), gantry (0x0C30) |
+| `0x0Cxx` | Motherboard-local: ADC (0x0C01–0x0C05), load switches (0x0C10–0x0C19), thermistors (0x0C20–0x0C25), gantry (0x0C30), current sense (0x0C40–0x0C49), TEC control (0x0C50–0x0C54) |
 | `0x0Fxx`–`0x10xx` | Actuator board commands (routed to ACT1/ACT2 via RS485) |
 | `0xBExx` | Debug routed commands (0xBEEF) |
 | `0xFFxx` | (reserved — system/reset commands) |

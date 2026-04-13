@@ -2,7 +2,7 @@
 
 Bare-metal embedded firmware for the **DMF Motherboard Rev 1** built around the **STM32H735IGT6** microcontroller. The board interfaces with a host PC over USB (via USB2517I hub + FT231XQ USB-UART bridge) using a custom framed serial protocol with CRC-16 integrity checking.
 
-The system controls **3 TEC (thermoelectric cooler) H-bridges**, reads an **18-bit ADC** for temperature/voltage sensing, **routes driverboard commands to up to 4 daughtercard boards** over dedicated UARTs, and **routes actuator board commands to up to 2 actuator boards** over RS485 (UART5/USART6 via LTC2864 transceivers), all commanded remotely by a host PC.
+The system controls **3 TEC (thermoelectric cooler) H-bridges** (DRV8702-Q1) with manual PWM control and current sensing, reads an **18-bit ADC** for temperature/voltage sensing, **routes driverboard commands to up to 4 daughtercard boards** over dedicated UARTs, and **routes actuator board commands to up to 2 actuator boards** over RS485 (UART5/USART6 via LTC2864 transceivers), all commanded remotely by a host PC.
 
 ## Target Hardware
 
@@ -14,7 +14,7 @@ The system controls **3 TEC (thermoelectric cooler) H-bridges**, reads an **18-b
 | Fast ADC | LTC2338-18 (18-bit, SPI) |
 | Slow ADC | ADS7066IRTER x3 (8-ch 16-bit, SPI) |
 | DAC | DAC80508ZRTER (8-ch 16-bit, SPI) |
-| TEC Drivers | DRV8702DQRHBRQ1 x3 (H-bridge, shared SPI + GPIO) |
+| TEC Drivers | DRV8702-Q1 x3 (full H-bridge, 4 FETs, PH/EN mode, shared SPI + GPIO + TIM1/TIM8 PWM) |
 | Load Switches | VN5T016AHTR-E x10 (high-side, GPIO enable) |
 | USB Hub | USB2517I-JZX (GPIO-strapped, internal defaults, 7-port hub) |
 | USB-UART Bridge | FT231XQ-T |
@@ -96,6 +96,7 @@ J-Link> g
 │   ├── RS485_Driver.h          Half-duplex RS485 driver (USART7 + MAX485)
 │   ├── Act_Uart_Driver.h       Actuator board UART driver (UART5/USART6 + LTC2864 RS485)
 │   ├── Thermistor.h            NTC thermistor ADC-to-temperature conversion
+│   ├── TEC_PWM.h               TEC timer PWM control (TIM1/TIM8 EN pins)
 │   └── ll_tick.h               SysTick millisecond counter
 ├── Src/
 │   ├── main.c                  Entry point, init sequence, main loop
@@ -116,6 +117,7 @@ J-Link> g
 │   ├── RS485_Driver.c          Polled RS485 TX/RX with DE/RE toggling
 │   ├── Act_Uart_Driver.c       Actuator board UART driver (2 instances, polled TX + DMA RX)
 │   ├── Thermistor.c            Steinhart-Hart conversion (SC50G104WH)
+│   ├── TEC_PWM.c               TEC timer PWM on EN pins (20 kHz default)
 │   ├── ll_tick.c               LL_IncTick / LL_GetTick implementation
 │   └── stm32h7xx_it.c          ISR handlers (SysTick, DMA, USART, faults)
 ├── docs/
@@ -226,6 +228,8 @@ See [docs/packet_protocol.md](docs/packet_protocol.md) for the full specificatio
 | `CMD_SWEEP_ADC` | `0x0C05` | Same as MEASURE_ADC | 6+(N×4) bytes: status + total_ms + N × Vpp floats | ISR → deferred per-switch sweep. Measures each switch individually |
 | `CMD_LOAD_*` | `0x0C10`–`0x0C19` | 1 byte: 0x01=ON, 0x00=OFF (or empty for query) | 1 byte: state (0x01/0x00) | ISR → deferred TX |
 | `CMD_THERM1`–`CMD_THERM6` | `0x0C20`–`0x0C25` | (none) | 4 bytes: float temperature (°C) | ISR → deferred TX |
+| `CMD_CSENSE_*` | `0x0C40`–`0x0C49` | (none) | 4 bytes: V_SENSE in mV (float LE) | ISR → deferred TX |
+| `CMD_TEC_SET/GET/STOP/STOP_ALL/RESET` | `0x0C50`–`0x0C54` | TEC ID + params | State/confirmation | ISR → deferred TX |
 | `CMD_GANTRY_CMD` | `0x0C30` | ASCII command string | ASCII response (or "TIMEOUT") | ISR → deferred RS485 TX/RX |
 | `CMD_GET_BOARD_TYPE` | `0x0B99` | (ignored) | 5 bytes: `00 00 FF 4D 42` ("MB") | ISR → deferred TX |
 | Routed DC commands (25) | `0x0Axx`, `0x0Bxx`, `0xBEEF` | boardID + command-specific | Relayed from daughtercard | ISR → deferred forward/list |

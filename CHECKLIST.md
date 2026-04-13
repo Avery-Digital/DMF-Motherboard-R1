@@ -37,16 +37,20 @@
 - [ ] Error handling and timeout recovery
 - [ ] GUI gantry control panel integration
 
-## 5. TEC PID Control (DRV8702 H-Bridge)
-- [ ] DRV8702 SPI register configuration (3 instances)
-- [ ] PWM output via TIM1 channels for H-bridge direction/enable
-- [ ] Thermistor readback via ADS7066 (6 channels on instance 3)
+## 5. TEC PID Control (DRV8702-Q1 H-Bridge)
+- [x] DRV8702-Q1 SPI register configuration (3 instances)
+- [x] PWM output via TIM1/TIM8 for H-bridge EN pins (TEC_PWM.c/h module)
+  - TEC1: TIM1_CH2 (PE11, AF1), TEC2: TIM1_CH4 (PE14, AF1), TEC3: TIM8_CH2 (PJ10, AF3)
+  - PH/EN mode (MODE=0): PH=GPIO direction, EN=timer PWM, 20 kHz default
+- [x] Thermistor readback via ADS7066 (6 channels on instance 3)
+- [x] TEC manual PWM control commands (0x0C50–0x0C54): SET, GET, STOP, STOP_ALL, RESET
+- [x] CMD_TEC_RESET (0x0C54): full power-cycle — stop PWM → sleep → delay → wake (re-latch MODE=0) → clear faults
+- [x] Load switch current sensing via VN5T016AH CSENSE + ADS7066 (0x0C40–0x0C49)
 - [ ] PID algorithm implementation (proportional, integral, derivative)
 - [ ] Setpoint management (target temperature per TEC)
 - [ ] PID tuning parameters (Kp, Ki, Kd) — configurable via command
 - [ ] Anti-windup for integral term
 - [ ] PID loop execution in main loop (fixed interval via SysTick)
-- [ ] TEC enable/disable commands
 - [ ] Temperature monitoring and over-temp protection
 - [ ] GUI controls: setpoint input, current temp display, PID tuning, enable/disable
 - [ ] Thermal runaway detection and safe shutdown

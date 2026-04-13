@@ -34,6 +34,13 @@ Tracks all hardware and firmware problems encountered during development, along 
 - **Fix:** Under investigation — may need to source and replace with a 3.3V-compatible RS485 transceiver
 - **Status:** OPEN
 
+### HW-005: DRV8702D-Q1 vs DRV8702-Q1 Part Number Confusion
+- **Boards affected:** Motherboard R1
+- **Symptom:** Documentation and schematic references listed the TEC driver as DRV8702D-Q1 (DRV8702DQRHBRQ1)
+- **Root cause:** The DRV8702**D**-Q1 is a **half-bridge** driver (2 FETs), while the actual part on the board is the **DRV8702-Q1** which is a **full H-bridge** driver (4 FETs). The "D" suffix denotes the half-bridge variant. This distinction matters for driver configuration (PH/EN mode with 4 FETs vs 2 FETs) and current handling capability.
+- **Fix:** Corrected all documentation and firmware comments to reference DRV8702-Q1 (full H-bridge, 4 FETs). Updated README.md Target Hardware table.
+- **Status:** Resolved (2026-04-13, documentation corrected)
+
 ---
 
 ## Firmware Issues — Motherboard
