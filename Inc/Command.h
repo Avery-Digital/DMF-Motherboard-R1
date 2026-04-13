@@ -40,7 +40,7 @@ extern "C" {
 /* Firmware version */
 #define FW_VERSION_MAJOR    1U
 #define FW_VERSION_MINOR    5U
-#define FW_VERSION_PATCH    1U
+#define FW_VERSION_PATCH    2U
 #define CMD_READ_ADC        CMD_CODE(0x0C, 0x01)    /**< Read LTC2338-18 ADC     */
 #define CMD_BURST_ADC       CMD_CODE(0x0C, 0x02)    /**< Burst 100x ADC reads    */
 #define CMD_MEASURE_ADC     CMD_CODE(0x0C, 0x03)    /**< Switch-controlled ADC   */
@@ -132,6 +132,7 @@ extern "C" {
 #define CMD_TEC_GET         CMD_CODE(0x0C, 0x51)    /**< Get TEC state           */
 #define CMD_TEC_STOP        CMD_CODE(0x0C, 0x52)    /**< Stop single TEC         */
 #define CMD_TEC_STOP_ALL    CMD_CODE(0x0C, 0x53)    /**< Stop all TECs           */
+#define CMD_TEC_RESET       CMD_CODE(0x0C, 0x54)    /**< Reset TEC (sleep/wake)  */
 
 #define GANTRY_RESPONSE_MAX  128U   /**< Max ASCII response bytes from gantry */
 #define GANTRY_TIMEOUT_MS    500U   /**< RS485 response timeout               */

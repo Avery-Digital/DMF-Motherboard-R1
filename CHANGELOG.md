@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.5.2 — 2026-04-13
+
+### CMD_TEC_RESET (0x0C54) — Full Power-Cycle Reset
+- Stop PWM → Sleep → delay → Wake → Clear faults via SPI
+- Re-latches MODE=0 (PH/EN mode) on wake
+- Response includes fault status after reset: `[s1][s2][tec_id][fault]`
+- Use to recover from overcurrent, overtemperature, or gate driver faults
+
+---
+
 ## v1.5.1 — 2026-04-13
 
 ### TEC PWM Fix — Correct PH/EN Mode for DRV8702-Q1

@@ -97,6 +97,9 @@ static void Command_HandleTecStop(const PacketHeader *header,
 
 static void Command_HandleTecStopAll(const PacketHeader *header);
 
+static void Command_HandleTecReset(const PacketHeader *header,
+                                    const uint8_t *payload);
+
 /* ==========================================================================
  *  COMMAND DISPATCH
  *
@@ -160,6 +163,9 @@ void Command_Dispatch(USART_Handle *handle,
         break;
     case CMD_TEC_STOP_ALL:
         Command_HandleTecStopAll(header);
+        break;
+    case CMD_TEC_RESET:
+        Command_HandleTecReset(header, payload);
         break;
 
     /* ---- Load Switch Commands (0x0C10–0x0C19) ---- */
@@ -731,6 +737,77 @@ static void Command_HandleTecStopAll(const PacketHeader *header)
     TEC_PWM_StopAll();
 
     uint8_t r[2] = { STATUS_CAT_OK, STATUS_CODE_OK };
+    tx_request.msg1    = header->msg1;
+    tx_request.msg2    = header->msg2;
+    tx_request.cmd1    = header->cmd1;
+    tx_request.cmd2    = header->cmd2;
+    memcpy(tx_request.payload, r, sizeof(r));
+    tx_request.length  = sizeof(r);
+    tx_request.pending = true;
+}
+
+/* ==========================================================================
+ *  CMD_TEC_RESET (0x0C54) — ISR context
+ *
+ *  Full power-cycle reset of a DRV8702 instance:
+ *    1. Stop PWM (EN → 0%)
+ *    2. Sleep (nSLEEP LOW — full internal reset)
+ *    3. Brief settle delay
+ *    4. Wake (nSLEEP HIGH — re-latches MODE=0 PH/EN)
+ *    5. Clear fault latches via SPI
+ *    6. Bridge ready at 0% duty, no fault
+ *
+ *  Payload: [tec_id (1-3)]
+ *  Response: [s1][s2][tec_id][fault_after_reset]
+ * ========================================================================== */
+static void Command_HandleTecReset(const PacketHeader *header,
+                                    const uint8_t *payload)
+{
+    uint8_t r[4] = { STATUS_CAT_OK, STATUS_CODE_OK, 0, 0 };
+
+    if (header->length < 1U || payload == NULL) {
+        r[0] = STATUS_CAT_GENERAL;
+        r[1] = STATUS_PAYLOAD_SHORT;
+        goto reply;
+    }
+
+    uint8_t tec_id = payload[0];
+    r[2] = tec_id;
+
+    if (tec_id < 1U || tec_id > TEC_COUNT) {
+        r[0] = STATUS_CAT_GENERAL;
+        r[1] = STATUS_PAYLOAD_SHORT;
+        goto reply;
+    }
+
+    DRV8702_Handle *drv = NULL;
+    switch (tec_id) {
+    case 1: drv = &drv8702_1_handle; break;
+    case 2: drv = &drv8702_2_handle; break;
+    case 3: drv = &drv8702_3_handle; break;
+    }
+
+    if (drv != NULL) {
+        /* 1. Stop PWM output */
+        TEC_PWM_Stop(tec_id);
+
+        /* 2. Sleep — full internal reset */
+        DRV8702_Sleep(drv);
+
+        /* 3. Brief delay (~1 ms worth of NOPs at 480 MHz) */
+        for (volatile uint32_t d = 0; d < 500000U; d++) { __NOP(); }
+
+        /* 4. Wake — re-latches MODE=0 (PH/EN) */
+        DRV8702_Wake(drv);
+
+        /* 5. Clear any residual fault latches */
+        DRV8702_ClearFaults(drv);
+
+        /* 6. Read fault status after reset */
+        r[3] = DRV8702_IsFaulted(drv) ? 0x01U : 0x00U;
+    }
+
+reply:
     tx_request.msg1    = header->msg1;
     tx_request.msg2    = header->msg2;
     tx_request.cmd1    = header->cmd1;
