@@ -69,7 +69,7 @@ Uses `float` (single-precision) and `logf()` from `<math.h>`. The Cortex-M7 FPU 
 
 ## Command Integration
 
-`CMD_THERM1`–`CMD_THERM6` (`0x0C20`–`0x0C25`) call `Thermistor_AdcToTempC()` and return a 4-byte IEEE 754 float (little-endian) as the response payload.
+`CMD_THERM1`–`CMD_THERM6` (`0x0C20`–`0x0C25`) call `Thermistor_AdcToTempC()`, scale the result by 100, and return it as a 2-byte big-endian signed int16 (0.01 °C resolution) in the response payload. `INT16_MIN` (`0x8000`) is reserved as the read-error sentinel.
 
 ## Typical Values
 

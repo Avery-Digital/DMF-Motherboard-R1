@@ -38,9 +38,9 @@ extern "C" {
 #define CMD_PING            CMD_CODE(0xDE, 0xAD)    /**< Ping / firmware version */
 
 /* Firmware version */
-#define FW_VERSION_MAJOR    1U
-#define FW_VERSION_MINOR    5U
-#define FW_VERSION_PATCH    2U
+#define FW_VERSION_MAJOR    2U
+#define FW_VERSION_MINOR    0U
+#define FW_VERSION_PATCH    0U
 #define CMD_READ_ADC        CMD_CODE(0x0C, 0x01)    /**< Read LTC2338-18 ADC     */
 #define CMD_BURST_ADC       CMD_CODE(0x0C, 0x02)    /**< Burst 100x ADC reads    */
 #define CMD_MEASURE_ADC     CMD_CODE(0x0C, 0x03)    /**< Switch-controlled ADC   */
@@ -247,7 +247,7 @@ extern "C" {
 
 #define MEASURE_ADC_DELAY_MIN_MS   0U     /**< Minimum delay in ms             */
 #define MEASURE_ADC_DELAY_MAX_MS   100U   /**< Maximum delay in ms             */
-#define MEASURE_ADC_DELAY_HDR_SIZE 2U     /**< Delay header: 2 bytes (uint16 LE) */
+#define MEASURE_ADC_DELAY_HDR_SIZE 2U     /**< Delay header: 2 bytes (uint16 BE) */
 #define MEASURE_ADC_FULL_HDR_SIZE  3U     /**< mask (1B) + delay (2B)            */
 #define MEASURE_ADC_PHASE_COUNT    6U     /**< Number of timed phases            */
 #define MEASURE_ADC_TIMING_SIZE    12U    /**< 6 × uint16 = 12 bytes            */

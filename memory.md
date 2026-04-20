@@ -3,9 +3,9 @@
 Portable project context for Claude Code. On a new PC, either tell Claude to
 "read memory.md" or copy this file to the Claude Code project memory directory.
 
-Last updated: 2026-04-13
+Last updated: 2026-04-20
 
-## Current Firmware Version: v1.5.2
+## Current Firmware Version: v2.0.0
 
 ## Project Locations
 - **Motherboard firmware:** C:\STM32_Firmware\DMF-Motherboard-R1 (GitHub: Avery-Digital/DMF-Motherboard-R1, branch: main)

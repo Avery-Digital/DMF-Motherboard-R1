@@ -34,6 +34,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "command.h"
+#include "endian_be.h"
 #include "DRV8702.h"
 #include "TEC_PWM.h"
 #include "DAC80508.h"
@@ -1015,15 +1016,9 @@ void Command_ExecuteMeasureADC(void)
 
         uint32_t offset = i * 4U;
         if (status == SPI_OK) {
-            meas_burst_payload[offset + 0U] = (uint8_t)( sample        & 0xFFU);
-            meas_burst_payload[offset + 1U] = (uint8_t)((sample >>  8U) & 0xFFU);
-            meas_burst_payload[offset + 2U] = (uint8_t)((sample >> 16U) & 0x03U);
-            meas_burst_payload[offset + 3U] = 0x00U;
+            be32_pack(&meas_burst_payload[offset], sample & 0x3FFFFU);
         } else {
-            meas_burst_payload[offset + 0U] = 0xFFU;
-            meas_burst_payload[offset + 1U] = 0xFFU;
-            meas_burst_payload[offset + 2U] = 0xFFU;
-            meas_burst_payload[offset + 3U] = 0xFFU;
+            be32_pack(&meas_burst_payload[offset], 0xFFFFFFFFU);
         }
     }
     phase_ms[3] = (uint16_t)(LL_GetTick() - phase_start);
@@ -1106,11 +1101,12 @@ void Command_ExecuteMeasureADC(void)
     /* ==================================================================
      *  PHASE 7: Calculate Vpp, elapsed time, and build response
      *
-     *  Response (422 bytes):
-     *    [s1][s2][Vpp float LE 4B][elapsed_ms uint32 LE 4B]
-     *    [phase1..6 uint16 LE × 6 = 12B]
-     *    [total_ms uint32 LE 4B]
-     *    [100 × 4B ADC samples = 400B]
+     *  Response (426 bytes):
+     *    [s1][s2][Vpp × 10000 as int32 BE 4B][elapsed_ms uint32 BE 4B]
+     *    [phase1..6 uint16 BE × 6 = 12B]
+     *    [total_ms uint32 BE 4B]
+     *    [100 × 4B ADC samples (uint32 BE) = 400B]
+     *  Error: Vpp = 0x80 00 00 00 (INT32_MIN sentinel) if ADC restore failed.
      * ================================================================== */
     uint32_t elapsed_ms = LL_GetTick() - t_start;
 
@@ -1136,24 +1132,24 @@ void Command_ExecuteMeasureADC(void)
 
     tx_request.payload[0] = error_occurred ? STATUS_CAT_ADC : STATUS_CAT_OK;
     tx_request.payload[1] = error_occurred ? STATUS_ADC_RESTORE_FAIL : STATUS_CODE_OK;
-    memcpy(&tx_request.payload[2], &vpp, sizeof(float));
-    tx_request.payload[6] = (uint8_t)(elapsed_ms & 0xFFU);
-    tx_request.payload[7] = (uint8_t)((elapsed_ms >> 8) & 0xFFU);
-    tx_request.payload[8] = (uint8_t)((elapsed_ms >> 16) & 0xFFU);
-    tx_request.payload[9] = (uint8_t)((elapsed_ms >> 24) & 0xFFU);
 
-    /* Per-phase timings: 6 × uint16 LE at bytes 10-21 */
+    /* Vpp as int32 BE, scaled ×10000 (0.1 mV resolution, matches HVSG setpoint) */
+    if (error_occurred) {
+        be32_pack(&tx_request.payload[2], 0x80000000U);  /* INT32_MIN sentinel */
+    } else {
+        be32_pack(&tx_request.payload[2], (uint32_t)(int32_t)(vpp * 10000.0f));
+    }
+
+    be32_pack(&tx_request.payload[6], elapsed_ms);
+
+    /* Per-phase timings: 6 × uint16 BE at bytes 10-21 */
     for (uint8_t p = 0U; p < MEASURE_ADC_PHASE_COUNT; p++) {
-        tx_request.payload[10U + p * 2U]      = (uint8_t)(phase_ms[p] & 0xFFU);
-        tx_request.payload[10U + p * 2U + 1U] = (uint8_t)((phase_ms[p] >> 8) & 0xFFU);
+        be16_pack(&tx_request.payload[10U + p * 2U], phase_ms[p]);
     }
 
     /* Total time: start to right before shipping data to host */
     uint32_t total_ms = LL_GetTick() - t_start;
-    tx_request.payload[22] = (uint8_t)(total_ms & 0xFFU);
-    tx_request.payload[23] = (uint8_t)((total_ms >> 8) & 0xFFU);
-    tx_request.payload[24] = (uint8_t)((total_ms >> 16) & 0xFFU);
-    tx_request.payload[25] = (uint8_t)((total_ms >> 24) & 0xFFU);
+    be32_pack(&tx_request.payload[22], total_ms);
 
     memcpy(&tx_request.payload[26], meas_burst_payload, ADC_BURST_PAYLOAD_SIZE);
     tx_request.length  = 2U + 4U + 4U + MEASURE_ADC_TIMING_SIZE + 4U + ADC_BURST_PAYLOAD_SIZE;  /* 426 bytes */
@@ -1167,7 +1163,7 @@ void Command_ExecuteMeasureADC(void)
  *  individually.  For each switch: PWM sync → timer → enable → ADC burst
  *  → Vpp → GND.  Returns array of Vpp values.
  *
- *  Response: [s1][s2][total_ms uint32 LE][Vpp_0 float LE]...[Vpp_N-1]
+ *  Response: [s1][s2][total_ms uint32 BE][Vpp_0..N-1 × 10000 as int32 BE each]
  * ========================================================================== */
 void Command_ExecuteSweepADC(void)
 {
@@ -1540,7 +1536,7 @@ void Command_ExecuteSweepADC(void)
     dc_list_active = false;
 
     /* ==================================================================
-     *  BUILD RESPONSE: [s1][s2][total_ms uint32 LE][N × Vpp float LE]
+     *  BUILD RESPONSE: [s1][s2][total_ms uint32 BE][N × Vpp × 10000 int32 BE]
      * ================================================================== */
     uint32_t total_ms = LL_GetTick() - t_start;
 
@@ -1551,13 +1547,11 @@ void Command_ExecuteSweepADC(void)
 
     tx_request.payload[0] = error_occurred ? STATUS_CAT_ADC : STATUS_CAT_OK;
     tx_request.payload[1] = error_occurred ? STATUS_ADC_RESTORE_FAIL : STATUS_CODE_OK;
-    tx_request.payload[2] = (uint8_t)(total_ms & 0xFFU);
-    tx_request.payload[3] = (uint8_t)((total_ms >> 8) & 0xFFU);
-    tx_request.payload[4] = (uint8_t)((total_ms >> 16) & 0xFFU);
-    tx_request.payload[5] = (uint8_t)((total_ms >> 24) & 0xFFU);
+    be32_pack(&tx_request.payload[2], total_ms);
 
     for (uint16_t g = 0U; g < num_groups; g++) {
-        memcpy(&tx_request.payload[6U + g * 4U], &vpp_results[g], sizeof(float));
+        be32_pack(&tx_request.payload[6U + g * 4U],
+                  (uint32_t)(int32_t)(vpp_results[g] * 10000.0f));
     }
 
     tx_request.length  = 2U + 4U + (num_groups * 4U);

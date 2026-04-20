@@ -43,14 +43,16 @@ Commands are 16-bit codes formed from two bytes in the packet header:
 
 **Request payload:** None (length = 0).
 
-**Response payload:** 4 bytes, little-endian unsigned 32-bit integer:
+**Response payload:** 4 bytes, big-endian unsigned 32-bit integer:
 
 | Byte | Content |
 |------|---------|
-| 0 | Bits [7:0] (LSB) |
-| 1 | Bits [15:8] |
-| 2 | Bits [17:16] (only 2 valid bits) |
-| 3 | `0x00` (reserved) |
+| 0 | `0x00` (reserved / high byte) |
+| 1 | Bits [17:16] (only 2 valid bits) |
+| 2 | Bits [15:8] |
+| 3 | Bits [7:0] (LSB) |
+
+On read error, all four bytes are `0xFF` (sentinel) with `STATUS_CAT_ADC` in the status bytes.
 
 **Value range:** 0 to 262143 (0x0003FFFF) for a valid 18-bit result.
 
@@ -75,18 +77,20 @@ Commands are 16-bit codes formed from two bytes in the packet header:
 
 **Request payload:** None (length = 0).
 
-**Response payload:** 400 bytes (100 samples x 4 bytes each):
+**Response payload:** 400 bytes (100 samples × 4 bytes each, **big-endian**):
 
 ```
 Byte offset  Content
 ─────────────────────────
-[4n + 0]     Sample n, bits [7:0]   (LSB)
-[4n + 1]     Sample n, bits [15:8]
-[4n + 2]     Sample n, bits [17:16] (only 2 valid bits)
-[4n + 3]     0x00 (reserved) — or 0xFF if sample failed
+[4n + 0]     0x00 (reserved / high byte) — or 0xFF if sample failed
+[4n + 1]     Sample n, bits [17:16] (only 2 valid bits)
+[4n + 2]     Sample n, bits [15:8]
+[4n + 3]     Sample n, bits [7:0]   (LSB)
 ```
 
 Where `n` ranges from 0 to 99.
+
+Host decode: `uint raw = BE.ReadU32(buf, 4*n) & 0x3FFFF;` then sign-extend if the 18-bit MSB is set (for bipolar ±10.24 V ADCs).
 
 **Error sentinel per sample:** If an individual SPI read fails, that 4-byte slot is set to `0xFFFFFFFF`. Other samples in the burst are still valid — the host can detect partial failures without discarding the entire burst.
 
@@ -117,7 +121,7 @@ Where `n` ranges from 0 to 99.
 | Byte | Content |
 |------|---------|
 | 0 | Board mask (bits 0-3 = boards 0-3, 1=include, 0=skip) |
-| 1–2 | Delay in milliseconds (uint16 LE, clamped to 0–100 ms) |
+| 1–2 | Delay in milliseconds (uint16 BE, clamped to 0–100 ms) |
 | 3+ | SET_LIST_OF_SW 5-byte groups: `[boardID][bank][SW_hi][SW_lo][state]` |
 
 Minimum payload: 8 bytes (1-byte mask + 2-byte delay + one 5-byte switch group).
@@ -128,15 +132,16 @@ Minimum payload: 8 bytes (1-byte mask + 2-byte delay + one 5-byte switch group).
 |------|---------|
 | 0 | status_1 (category: 0x00=OK, 0x06=ADC error) |
 | 1 | status_2 (code: 0x00=OK, 0x04=DC timeout, 0x05=restore fail) |
-| 2–5 | Vpp in volts (IEEE 754 float, little-endian) |
-| 6–9 | Total elapsed time in ms (uint32 LE) |
-| 10–11 | Phase 1 time — Save HVSG (uint16 LE) |
-| 12–13 | Phase 2 time — GND HVSG (uint16 LE) |
-| 14–15 | Phase 3 time — PWM Sync (uint16 LE) |
-| 16–17 | Phase 4 time — Deterministic: timer + fire + burst ADC (uint16 LE) |
-| 18–19 | Phase 5 time — Drain responses (uint16 LE) |
-| 20–21 | Phase 6 time — Restore (uint16 LE) |
-| 22–421 | 100 ADC samples × 4 bytes each (same format as CMD_BURST_ADC) |
+| 2–5 | Vpp × 10000 as int32 BE (0.1 mV units). `0x80000000` = error sentinel. |
+| 6–9 | Total elapsed time in ms (uint32 BE) |
+| 10–11 | Phase 1 time — Save HVSG (uint16 BE) |
+| 12–13 | Phase 2 time — GND HVSG (uint16 BE) |
+| 14–15 | Phase 3 time — PWM Sync (uint16 BE) |
+| 16–17 | Phase 4 time — Deterministic: timer + fire + burst ADC (uint16 BE) |
+| 18–19 | Phase 5 time — Drain responses (uint16 BE) |
+| 20–21 | Phase 6 time — Restore (uint16 BE) |
+| 22–25 | Total_ms (uint32 BE) |
+| 26–425 | 100 ADC samples × 4 bytes each, BE (same format as CMD_BURST_ADC) |
 
 **Vpp calculation:** See [Vpp Algorithm](#vpp-peak-to-peak-algorithm) section below for full details.
 
@@ -189,7 +194,7 @@ Payload: [01] [00 00] [00 00 00 2A 01]
 | Byte | Content |
 |------|---------|
 | 0 | Board mask (bits 0-3) |
-| 1–2 | Delay in milliseconds (uint16 LE, 0–100 ms) |
+| 1–2 | Delay in milliseconds (uint16 BE, 0–100 ms) |
 | 3+ | SET_LIST_OF_SW 5-byte groups: `[boardID][bank][SW_hi][SW_lo][state]` |
 
 Minimum payload: 8 bytes (3-byte header + one 5-byte group).
@@ -199,8 +204,8 @@ Minimum payload: 8 bytes (3-byte header + one 5-byte group).
 | Byte | Content |
 |------|---------|
 | 0-1 | status_1, status_2 |
-| 2-5 | Total elapsed time in ms (uint32 LE) |
-| 6+ | N × Vpp in volts (IEEE 754 float LE, 4 bytes each) |
+| 2-5 | Total elapsed time in ms (uint32 BE) |
+| 6+ | N × Vpp × 10000 as int32 BE (0.1 mV units, 4 bytes each) |
 
 **Per-switch measurement loop:**
 
@@ -491,7 +496,15 @@ Each `case` in `Command_Dispatch()` passes the appropriate `LoadSwitch_ID` enum 
 
 **Request payload:** None (length = 0).
 
-**Response payload:** 4 bytes, IEEE 754 little-endian float — temperature in degrees C.
+**Response payload:** 4 bytes total:
+
+| Byte | Content |
+|------|---------|
+| 0 | status_1 (0x00=OK, 0x06=STATUS_CAT_ADC) |
+| 1 | status_2 |
+| 2–3 | temperature × 100 as int16 BE (0.01 °C resolution). `0x8000` = INT16_MIN sentinel on read error. |
+
+Host recovers °C via `BE.ReadI16(buf, 2) / 100.0f`.
 
 The firmware converts the raw ADC code to temperature using Steinhart-Hart coefficients for the SC50G104WH NTC thermistor (Material Type G, R25 = 100KΩ). The conversion accounts for the measurement circuit: 100 µA constant-current source driving R_th in parallel with a resistor divider (R1 = 10K, R2 = 1K), with the ADC reading across R2.
 
@@ -536,11 +549,22 @@ None (length = 0).
 
 ### Response Payload
 
-4 bytes, IEEE 754 little-endian float — V_SENSE in millivolts (mV).
+4 bytes total — V_SENSE × 10 as uint16 BE (0.1 mV resolution) with status prefix.
 
 | Byte | Content |
 |------|---------|
-| 0–3 | V_SENSE in mV (IEEE 754 float, LE) |
+| 0–1 | status_1, status_2 |
+| 2–3 | V_SENSE × 10 as uint16 BE (0.1 mV). `0xFFFF` sentinel on error. |
+
+**Worked example — CMD_CSENSE_VALVE1 (`0x0C40`) at 123.4 mV (msg IDs 0xA1 0xB2):**
+
+```
+Request  (wire): 02 A1 B2 00 00 0C 40 CD 8C 7E
+Response (wire): 02 A1 B2 00 04 0C 40 00 00 04 D2 22 24 7E
+                             len=4   cmd    s1 s2  u16BE  CRC
+```
+
+Decode: `0x04D2 = 1234` → `1234 / 10 = 123.4 mV`. CRC `0x2224` over `[A1 B2 00 04 0C 40 00 00 04 D2]`.
 
 Returns `NaN` (0x7FC00000) if the ADC read fails.
 
@@ -820,7 +844,7 @@ For software engineers integrating with the motherboard, here is the exact byte 
                   len=10   cmd=DEAD   status     fixed test payload
 ```
 
-**Note:** As of v1.0.1, the firmware version string reported via PING is `"MB_R1 v1.0.1"`.
+**Note:** The firmware version string reported via PING is `"MB_R1 v2.0.0"`.
 
 ---
 
@@ -831,7 +855,8 @@ For software engineers integrating with the motherboard, here is the exact byte 
                   len=0
 
 ← [02] [m1] [m2] [00] [06] [0C] [01] [s1] [s2] [b0] [b1] [b2] [b3] [CRC] [7E]
-                  len=6               status     32-bit LE, 18-bit ADC result
+                  len=6               status     32-bit BE, 18-bit ADC result
+                                                 byte[0]=0x00 reserved, byte[1]=bits 17:16
                                                  (0xFFFFFFFF = read error)
 ```
 
@@ -842,8 +867,8 @@ For software engineers integrating with the motherboard, here is the exact byte 
 ```
 → [02] [m1] [m2] [00] [00] [0C] [02] [CRC] [7E]
 
-← [02] [m1] [m2] [01] [92] [0C] [02] [s1] [s2] [400 bytes: 100 x 4-byte LE samples] [CRC] [7E]
-                  len=402             status     each sample: 32-bit LE, 18-bit ADC result
+← [02] [m1] [m2] [01] [92] [0C] [02] [s1] [s2] [400 bytes: 100 x 4-byte BE samples] [CRC] [7E]
+                  len=402             status     each sample: 32-bit BE, 18-bit ADC result
                                                  (0xFFFFFFFF per failed sample)
 ```
 
@@ -871,6 +896,43 @@ For software engineers integrating with the motherboard, here is the exact byte 
 
 Load switch IDs: x=0 Valve1, x=1 Valve2, x=2 Microplate, x=3 Fan, x=4 TEC1, x=5 TEC2, x=6 TEC3, x=7 Assembly, x=8 Daughter1, x=9 Daughter2.
 
+**Worked example — query Valve1 (0x0C10), msg IDs 0xA1 0xB2, reports ON:**
+
+```
+Request  (wire): 02 A1 B2 00 00 0C 10 XX XX 7E
+Response (wire): 02 A1 B2 00 03 0C 10 00 00 01 XX XX 7E
+                             len=3   cmd    s1 s2 on
+```
+Replace `XX XX` with the CRC-16 over the preceding `[msg..payload]` bytes.
+
+---
+
+### CMD_MEASURE_ADC (0x0C03) — Request
+
+Request payload is `[board_mask(1B)][delay_ms(2B BE)][switch_groups(5B each)]`.
+Minimum 8 payload bytes. Delay is clamped to 0–100 ms in firmware.
+
+**Worked example — board 0 only, 10 ms delay, one switch group (board 0, bank 0, SW#1, state=HVSG):**
+
+```
+→ 02 A1 B2 00 08 0C 03 01 00 0A 00 00 00 01 01 96 75 7E
+            len=8   cmd  mask  delay  -- switch group ---  CRC
+                         BE   bd bk SWhi SWlo state
+```
+
+- `mask=0x01`: bit 0 = board 0 included.
+- `delay=0x000A` = 10 ms (BE).
+- Switch group: board 0, bank 0, switch number `0x0001` (BE), state `0x01` = HVSG.
+- CRC `0x9675` over `[A1 B2 00 08 0C 03 01 00 0A 00 00 00 01 01]`.
+
+**Response** (426 bytes) layout — see the MEASURE_ADC section near the top of this document for field-by-field details. Key offsets (after the 2-byte status prefix):
+
+- Bytes 2–5: Vpp × 10000 as int32 BE. `0x80000000` sentinel on error.
+- Bytes 6–9: `elapsed_ms` uint32 BE.
+- Bytes 10–21: six `uint16 BE` phase timestamps.
+- Bytes 22–25: `total_ms` uint32 BE.
+- Bytes 26–425: 100 × (uint32 BE, 18-bit ADC sample with top byte reserved).
+
 ---
 
 ### CMD_THERM1-6 (0x0C20-0x0C25)
@@ -879,12 +941,22 @@ Load switch IDs: x=0 Valve1, x=1 Valve2, x=2 Microplate, x=3 Fan, x=4 TEC1, x=5 
 → [02] [m1] [m2] [00] [00] [0C] [2x] [CRC] [7E]
                   len=0              x=0 therm1 ... x=5 therm6
 
-← [02] [m1] [m2] [00] [06] [0C] [2x] [s1] [s2] [f0] [f1] [f2] [f3] [CRC] [7E]
-                  len=6              status         IEEE 754 float, LE, temperature in °C
-                                                    NaN (0x0000C07F LE) = read error or absent
+← [02] [m1] [m2] [00] [04] [0C] [2x] [s1] [s2] [t_hi] [t_lo] [CRC] [7E]
+                  len=4              status         int16 BE = temp_c × 100 (0.01 °C res)
+                                                    0x8000 (INT16_MIN) = read error or absent
 ```
 
-Conversion: `memcpy(&float_val, &payload[2], 4)` on little-endian systems (offset by 2 for status bytes).
+Conversion: `float temp_c = BE.ReadI16(payload, 2) / 100.0f;` (offset by 2 for status bytes).
+
+**Worked example — THERM1 at 25.50 °C (msg IDs 0xA1 0xB2):**
+
+```
+Request  (wire): 02 A1 B2 00 00 0C 20 A1 2A 7E
+Response (wire): 02 A1 B2 00 04 0C 20 00 00 09 F6 29 42 7E
+                             len=4   cmd    s1 s2  i16BE  CRC
+```
+
+Decode: `0x09F6 = 2550` → `2550 / 100 = 25.50 °C`. CRC `0x2942` computed over `[A1 B2 00 04 0C 20 00 00 09 F6]`.
 
 ---
 

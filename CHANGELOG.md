@@ -1,5 +1,53 @@
 # Changelog
 
+## v2.0.0 — 2026-04-20
+
+### Breaking: unified big-endian wire format + scaled integers
+
+The protocol is now big-endian end-to-end. All existing BE fields (framing, CRC,
+command codes, switch numbers, actuator mask, MEASURE_ADC delay) keep their
+order. All previously little-endian fields flip to BE, and floats are replaced
+with scaled integers so hex dumps are human-readable on every board.
+
+New shared helper header `Inc/endian_be.h` (`be16_pack/unpack`, `be32_pack/unpack`).
+
+| Command | Field | Before | After |
+|---|---|---|---|
+| `CMD_THERM1..6` (0x0C20–25) | temperature | IEEE 754 float LE (4B) | `temp_c × 100` as int16 BE (2B); `0x8000` sentinel on read error |
+| `CMD_CSENSE_*` (0x0C40–49) | V_SENSE mV | IEEE 754 float LE (4B) | `v_sense_mV × 10` as uint16 BE (2B); `0xFFFF` sentinel on error |
+| `CMD_READ_ADC` (0x0C01) | 18-bit ADC result | uint32 LE | uint32 BE (byte[0] reserved/top) |
+| `CMD_BURST_ADC` (0x0C02) | 100 samples | uint32 LE × 100 | uint32 BE × 100 |
+| `CMD_MEASURE_ADC` (0x0C03) | Vpp | IEEE 754 float LE | `vpp × 10000` as int32 BE; `0x80000000` sentinel on error |
+| `CMD_MEASURE_ADC` | elapsed_ms, total_ms | uint32 LE | uint32 BE |
+| `CMD_MEASURE_ADC` | 6 × phase timestamps | uint16 LE | uint16 BE |
+| `CMD_MEASURE_ADC` | 100 burst samples | uint32 LE × 100 | uint32 BE × 100 |
+| `CMD_SWEEP_ADC` (0x0C05) | total_ms | uint32 LE | uint32 BE |
+| `CMD_SWEEP_ADC` | per-switch Vpp array | IEEE 754 float LE × N | `vpp × 10000` int32 BE × N |
+
+Thermistor response shrinks 6 → 4 bytes. Current-sense response shrinks 6 → 4
+bytes. MEASURE_ADC response size unchanged (426 bytes). SWEEP_ADC response
+structure unchanged.
+
+**Paired release required.** Every firmware image and the GUI move to v2.0.0
+together. Any old firmware talking to new GUI (or vice versa) will decode
+garbage.
+
+Firmware version string: `"MB_R1 v2.0.0"`.
+
+---
+
+## v1.5.3 — 2026-04-20
+
+### Breaking: MEASURE_ADC / SWEEP_ADC delay now big-endian
+- `CMD_MEASURE_ADC` (0x0C03) and `CMD_SWEEP_ADC` (0x0C05) request payloads now encode the 2-byte `delay_ms` field as **big-endian** (was little-endian).
+- Example: 10 ms was `[0x0A][0x00]` on the wire, now `[0x00][0x0A]`.
+- Payload layout unchanged otherwise: `[board_mask(1B)][delay_ms(2B BE)][5-byte switch groups…]`.
+- Switch-number field inside each 5-byte group was already big-endian — delay now matches.
+- Response format unchanged (no `delay_ms` in response).
+- **Paired change required on host side.** GUI `MEASURE_ADC_BUTTON_Click` in `Form1.cs` was updated in lockstep; older GUI builds will silently send the wrong delay (e.g. 10 ms LE → decoded as 2560 ms, clamped to 100 ms).
+
+---
+
 ## v1.5.2 — 2026-04-13
 
 ### CMD_TEC_RESET (0x0C54) — Full Power-Cycle Reset

@@ -18,6 +18,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "command.h"
 #include "main.h"
+#include "endian_be.h"
 #include "spi_driver.h"
 #include "VN5T016AH.h"
 #include "ADS7066.h"
@@ -307,7 +308,7 @@ static void Command_HandlePing(USART_Handle *handle,
     (void)handle;
     (void)payload;
 
-    /* Response: [status1][status2]["MB_R1 v1.0.0"] */
+    /* Response: [status1][status2]["MB_R1 vX.Y.Z"] (version built from FW_VERSION_* defines) */
     uint8_t response[2 + 12];
     response[0] = STATUS_CAT_OK;
     response[1] = STATUS_CODE_OK;
@@ -358,7 +359,7 @@ static void Command_HandleReadADC(USART_Handle *handle,
     (void)payload;
 
     uint32_t adc_result = 0U;
-    uint8_t  response[6];  /* [status1][status2][4-byte ADC LE] */
+    uint8_t  response[6];  /* [status1][status2][4-byte ADC BE] */
 
     response[0] = STATUS_CAT_OK;
     response[1] = STATUS_CODE_OK;
@@ -366,17 +367,11 @@ static void Command_HandleReadADC(USART_Handle *handle,
     SPI_Status status = SPI_LTC2338_Read(&spi2_handle, &adc_result);
 
     if (status == SPI_OK) {
-        response[2] = (uint8_t)( adc_result        & 0xFFU);
-        response[3] = (uint8_t)((adc_result >>  8U) & 0xFFU);
-        response[4] = (uint8_t)((adc_result >> 16U) & 0x03U);
-        response[5] = 0x00U;
+        be32_pack(&response[2], adc_result & 0x3FFFFU);  /* 18-bit sample, BE; byte [2] = 0x00 (reserved/top) */
     } else {
         response[0] = STATUS_CAT_ADC;
         response[1] = STATUS_ADC_SPI_FAIL;
-        response[2] = 0xFFU;
-        response[3] = 0xFFU;
-        response[4] = 0xFFU;
-        response[5] = 0xFFU;
+        be32_pack(&response[2], 0xFFFFFFFFU);
     }
 
     tx_request.msg1    = header->msg1;
@@ -415,15 +410,15 @@ static void Command_HandleBurstADC(USART_Handle *handle,
  *  CMD_BURST_ADC EXECUTION — main loop context only
  *
  *  Reads ADC_BURST_COUNT (100) samples from the LTC2338-18 via SPI2.
- *  Each sample is packed as a 4-byte little-endian uint32_t.
+ *  Each sample is packed as a 4-byte big-endian uint32_t.
  *  A failed read is stored as 0xFFFFFFFF so the host can detect partial
  *  failures without discarding the rest of the burst.
  *
  *  Payload layout (400 bytes):
- *    Bytes [4n+0] — sample n bits [7:0]   (LSB)
- *    Bytes [4n+1] — sample n bits [15:8]
- *    Bytes [4n+2] — sample n bits [17:16]
- *    Bytes [4n+3] — 0x00  (reserved) or 0xFF on error
+ *    Bytes [4n+0] — 0x00  (reserved) or 0xFF on error
+ *    Bytes [4n+1] — sample n bits [17:16]
+ *    Bytes [4n+2] — sample n bits [15:8]
+ *    Bytes [4n+3] — sample n bits [7:0]   (LSB)
  *
  *  Called by the main loop when burst_request.pending is set.
  * ========================================================================== */
@@ -438,16 +433,10 @@ void Command_ExecuteBurstADC(void)
         uint32_t offset = i * 4U;
 
         if (status == SPI_OK) {
-            burst_payload[offset + 0U] = (uint8_t)( sample        & 0xFFU);
-            burst_payload[offset + 1U] = (uint8_t)((sample >>  8U) & 0xFFU);
-            burst_payload[offset + 2U] = (uint8_t)((sample >> 16U) & 0x03U);
-            burst_payload[offset + 3U] = 0x00U;
+            be32_pack(&burst_payload[offset], sample & 0x3FFFFU);
         } else {
             /* Sentinel — 0xFFFFFFFF flags a failed read to the host */
-            burst_payload[offset + 0U] = 0xFFU;
-            burst_payload[offset + 1U] = 0xFFU;
-            burst_payload[offset + 2U] = 0xFFU;
-            burst_payload[offset + 3U] = 0xFFU;
+            be32_pack(&burst_payload[offset], 0xFFFFFFFFU);
         }
     }
 
@@ -513,9 +502,10 @@ static void Command_HandleLoadSwitch(USART_Handle *handle,
  *  Reads ADS7066 instance 3 on the specified channel (0–5).
  *  Each channel is connected to a thermistor circuit.
  *
- *  Response payload (4 bytes):
- *    IEEE 754 float, little-endian — temperature in degrees C.
- *    Returns NaN on read error or if the thermistor is absent.
+ *  Response: [status1][status2][temp_c × 100 as int16 BE (2B)]
+ *  Error    : [STATUS_CAT_ADC][STATUS_ADS_READ_FAIL][0x80 0x00]  (INT16_MIN sentinel)
+ *
+ *  Scale: value / 100.0f on host recovers degrees C with 0.01 °C resolution.
  * ========================================================================== */
 static void Command_HandleThermistor(USART_Handle *handle,
                                       const PacketHeader *header,
@@ -526,8 +516,7 @@ static void Command_HandleThermistor(USART_Handle *handle,
     (void)payload;
 
     uint16_t adc_result = 0U;
-    float    temp_c;
-    uint8_t  response[6];  /* [status1][status2][4-byte float LE] */
+    uint8_t  response[4];  /* [status1][status2][i16 BE: temp_c × 100] */
 
     response[0] = STATUS_CAT_OK;
     response[1] = STATUS_CODE_OK;
@@ -536,15 +525,13 @@ static void Command_HandleThermistor(USART_Handle *handle,
                                                  channel, &adc_result);
 
     if (status == ADS7066_OK) {
-        temp_c = Thermistor_AdcToTempC(adc_result);
+        float temp_c = Thermistor_AdcToTempC(adc_result);
+        be16_pack(&response[2], (uint16_t)(int16_t)(temp_c * 100.0f));
     } else {
         response[0] = STATUS_CAT_ADC;
         response[1] = STATUS_ADS_READ_FAIL;
-        uint32_t nan_bits = 0x7FC00000U;
-        memcpy(&temp_c, &nan_bits, sizeof(temp_c));
+        be16_pack(&response[2], 0x8000U);  /* INT16_MIN sentinel */
     }
-
-    memcpy(&response[2], &temp_c, sizeof(float));
 
     tx_request.msg1    = header->msg1;
     tx_request.msg2    = header->msg2;
@@ -559,7 +546,7 @@ static void Command_HandleThermistor(USART_Handle *handle,
  *  LOAD SWITCH CURRENT SENSE (0x0C40–0x0C49) — ISR context
  *
  *  Reads VN5T016AH CSENSE voltage via 1 kΩ to GND → ADS7066.
- *  Returns V_SENSE in millivolts as a float.
+ *  Returns V_SENSE in millivolts scaled ×10 (0.1 mV resolution).
  *
  *  V_SENSE is proportional to I_OUT:
  *    I_SENSE = I_OUT / kILIS
@@ -568,7 +555,8 @@ static void Command_HandleThermistor(USART_Handle *handle,
  *  kILIS varies with load current (non-linear), so we return the raw
  *  sense voltage and let the host apply calibration if needed.
  *
- *  Response: [status1][status2][v_sense_mV float LE (4B)]
+ *  Response: [status1][status2][v_sense_mV × 10 as uint16 BE (2B)]
+ *  Error    : [STATUS_CAT_ADC][STATUS_ADS_READ_FAIL][0xFF 0xFF]  (sentinel)
  * ========================================================================== */
 static void Command_HandleCurrentSense(USART_Handle *handle,
                                         const PacketHeader *header,
@@ -580,8 +568,7 @@ static void Command_HandleCurrentSense(USART_Handle *handle,
     (void)payload;
 
     uint16_t adc_result = 0U;
-    float    v_sense_mV;
-    uint8_t  response[6];  /* [status1][status2][4-byte float LE] */
+    uint8_t  response[4];  /* [status1][status2][u16 BE: v_sense_mV × 10] */
 
     response[0] = STATUS_CAT_OK;
     response[1] = STATUS_CODE_OK;
@@ -589,16 +576,14 @@ static void Command_HandleCurrentSense(USART_Handle *handle,
     ADS7066_Status status = ADS7066_ReadChannel(adc_handle, channel, &adc_result);
 
     if (status == ADS7066_OK) {
-        /* V_SENSE in mV = (ADC / 65536) × 2500 mV */
-        v_sense_mV = ((float)adc_result / CSENSE_ADC_CODES) * (CSENSE_VREF * 1000.0f);
+        /* V_SENSE in mV = (ADC / 65536) × 2500 mV; scale ×10 for 0.1 mV resolution */
+        float v_sense_mV = ((float)adc_result / CSENSE_ADC_CODES) * (CSENSE_VREF * 1000.0f);
+        be16_pack(&response[2], (uint16_t)(v_sense_mV * 10.0f));
     } else {
         response[0] = STATUS_CAT_ADC;
         response[1] = STATUS_ADS_READ_FAIL;
-        uint32_t nan_bits = 0x7FC00000U;
-        memcpy(&v_sense_mV, &nan_bits, sizeof(v_sense_mV));
+        be16_pack(&response[2], 0xFFFFU);  /* max-value sentinel */
     }
-
-    memcpy(&response[2], &v_sense_mV, sizeof(float));
 
     tx_request.msg1    = header->msg1;
     tx_request.msg2    = header->msg2;
@@ -998,11 +983,12 @@ void Command_ExecuteGantry(void)
  *  the full save → GND → set → timer → ADC → restore → Vpp sequence.
  *
  *  Request payload:
- *    Bytes [0..1] — delay in ms (uint16 LE, 1–100)
- *    Bytes [2..N] — SET_LIST_OF_SW 5-byte groups:
+ *    Byte  [0]    — board_mask (bit 0 = board 0 … bit 3 = board 3)
+ *    Bytes [1..2] — delay in ms (uint16 BE, clamped 0–100)
+ *    Bytes [3..N] — SET_LIST_OF_SW 5-byte groups:
  *                   [boardID][bank][SW_hi][SW_lo][state]
  *
- *  Minimum payload: 7 bytes (2-byte delay + one 5-byte group)
+ *  Minimum payload: 8 bytes (1-byte mask + 2-byte delay + one 5-byte group)
  * ========================================================================== */
 static void Command_HandleMeasureADC(USART_Handle *handle,
                                       const PacketHeader *header,
@@ -1024,9 +1010,9 @@ static void Command_HandleMeasureADC(USART_Handle *handle,
         return;
     }
 
-    /* Parse board mask and delay */
+    /* Parse board mask and delay (delay is big-endian on the wire) */
     uint8_t  board_mask = payload[0];
-    uint16_t delay_ms   = (uint16_t)payload[1] | ((uint16_t)payload[2] << 8);
+    uint16_t delay_ms   = ((uint16_t)payload[1] << 8) | (uint16_t)payload[2];
     if (delay_ms < MEASURE_ADC_DELAY_MIN_MS) delay_ms = MEASURE_ADC_DELAY_MIN_MS;
     if (delay_ms > MEASURE_ADC_DELAY_MAX_MS) delay_ms = MEASURE_ADC_DELAY_MAX_MS;
 
@@ -1070,8 +1056,9 @@ static void Command_HandleSweepADC(USART_Handle *handle,
         return;
     }
 
+    /* Delay is big-endian on the wire */
     uint8_t  board_mask = payload[0];
-    uint16_t delay_ms   = (uint16_t)payload[1] | ((uint16_t)payload[2] << 8);
+    uint16_t delay_ms   = ((uint16_t)payload[1] << 8) | (uint16_t)payload[2];
     if (delay_ms < MEASURE_ADC_DELAY_MIN_MS) delay_ms = MEASURE_ADC_DELAY_MIN_MS;
     if (delay_ms > MEASURE_ADC_DELAY_MAX_MS) delay_ms = MEASURE_ADC_DELAY_MAX_MS;
 

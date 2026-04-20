@@ -79,11 +79,12 @@ Note: SET_LIST request payload is 600 × 5 bytes = 3000 bytes. With escaping thi
 ### Request Format
 
 ```
-[board_mask][delay_lo][delay_hi][switch_groups...]
+[board_mask][delay_hi][delay_lo][switch_groups...]
 ```
 
 - `board_mask`: bitmask bits 0-3 = boards 0-3 (only masked boards are contacted)
-- `delay_ms`: uint16 LE, clamped 1–100 ms
+- `delay_ms`: uint16 BE, clamped 1–100 ms
+- All multi-byte fields in the response are big-endian (v2.0.0+).
 - Switch groups: 5 bytes each `[boardID][bank][SW_hi][SW_lo][state]`
 
 ### Response Format (422 bytes)
