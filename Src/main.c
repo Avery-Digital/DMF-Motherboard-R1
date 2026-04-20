@@ -1399,7 +1399,9 @@ void Command_ExecuteSweepADC(void)
      *    5. Drain SET_LIST_OF_SW response
      *    6. GND this switch (wait for response)
      * ================================================================== */
-    static uint32_t burst_raw[ADC_BURST_COUNT];
+    /* volatile so the debugger-inspection writes aren't optimized out and
+     * GCC doesn't raise -Wunused-but-set-variable. */
+    static volatile uint32_t burst_raw[ADC_BURST_COUNT];
 
     for (uint16_t g = 0U; g < num_groups; g++) {
         const uint8_t *group = &sw_data[g * group_size];
