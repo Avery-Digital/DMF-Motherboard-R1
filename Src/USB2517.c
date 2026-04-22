@@ -128,7 +128,7 @@ void USB2517_SetStrapPins(void)
     /* 3. Brief delay to ensure strap pins are stable before releasing reset */
     for (volatile uint32_t d = 0; d < 5000; d++) { __NOP(); }
 
-    /* 4. Release reset — hub exits POR and samples CFG_SEL[2:1:0] = 0,0,1 */
+    /* 4. Release reset — hub exits POR and samples CFG_SEL[2:1:0] = 1,0,1 */
     LL_GPIO_SetOutputPin(usb2517_reset_n_pin.port, usb2517_reset_n_pin.pin);       /* PC13 HIGH — release */
 }
 
