@@ -139,8 +139,8 @@ uint16_t RS485_SendCommand(RS485_Handle *handle,
         }
     }
 
-    /* Send carriage return (gantry protocol terminator) */
-    if (!TxByte(usart, 0x0DU, timeout_ms)) {
+    /* Send null terminator (gantry V304 protocol terminator) */
+    if (!TxByte(usart, 0x00U, timeout_ms)) {
         RS485_SetRx(handle);
         return 0U;
     }
@@ -150,6 +150,10 @@ uint16_t RS485_SendCommand(RS485_Handle *handle,
         RS485_SetRx(handle);
         return 0U;
     }
+
+    /* Brief delay for MAX485 propagation + NOT gate settling before
+     * switching to receive.  ~10 us at 480 MHz is conservative. */
+    for (volatile uint32_t d = 0; d < 1200; d++) { __NOP(); }
 
     /* ---- RX phase ---- */
     RS485_SetRx(handle);
@@ -165,9 +169,9 @@ uint16_t RS485_SendCommand(RS485_Handle *handle,
         if (LL_USART_IsActiveFlag_RXNE_RXFNE(usart)) {
             uint8_t byte = LL_USART_ReceiveData8(usart);
 
-            if (byte == 0x0DU || byte == 0x0AU) {
-                /* CR or LF — response complete */
-                if (count > 0U) break;  /* ignore leading CR/LF */
+            if (byte == 0x00U || byte == 0x0DU || byte == 0x0AU) {
+                /* NULL, CR, or LF — response complete */
+                if (count > 0U) break;  /* ignore leading terminators */
                 continue;
             }
 
