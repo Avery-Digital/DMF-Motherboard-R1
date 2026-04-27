@@ -1380,7 +1380,7 @@ ADS7066_Handle ads7066_3_handle = {
  *
  *  USART7 is on APB1.
  *  Kernel clock source: PLL2Q = 128 MHz.
- *  Baud: 9600 (gantry default).
+ *  Baud: 115200.
  * ========================================================================== */
 const RS485_Config rs485_cfg = {
     .usart = {
@@ -1413,7 +1413,7 @@ const RS485_Config rs485_cfg = {
         .bus_clk_enable     = LL_APB1_GRP1_PERIPH_UART7,
         .kernel_clk_source  = LL_RCC_USART234578_CLKSOURCE_PLL2Q,
         .prescaler          = LL_USART_PRESCALER_DIV1,
-        .baudrate           = 9600U,
+        .baudrate           = 115200U,
         .data_width         = LL_USART_DATAWIDTH_8B,
         .stop_bits          = LL_USART_STOPBITS_1,
         .parity             = LL_USART_PARITY_NONE,

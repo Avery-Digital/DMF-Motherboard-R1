@@ -158,6 +158,17 @@ uint16_t RS485_SendCommand(RS485_Handle *handle,
     /* ---- RX phase ---- */
     RS485_SetRx(handle);
 
+    /* Clear any error flags (overrun, framing, noise) that may have
+     * accumulated during TX phase — these block RXNE if not cleared */
+    if (LL_USART_IsActiveFlag_ORE(usart))  LL_USART_ClearFlag_ORE(usart);
+    if (LL_USART_IsActiveFlag_FE(usart))   LL_USART_ClearFlag_FE(usart);
+    if (LL_USART_IsActiveFlag_NE(usart))   LL_USART_ClearFlag_NE(usart);
+
+    /* Flush any stale RX bytes (e.g. echo from own TX on half-duplex bus) */
+    while (LL_USART_IsActiveFlag_RXNE_RXFNE(usart)) {
+        (void)LL_USART_ReceiveData8(usart);
+    }
+
     uint16_t count = 0U;
     uint32_t t0 = LL_GetTick();
 
