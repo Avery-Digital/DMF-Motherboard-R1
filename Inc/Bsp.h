@@ -573,6 +573,12 @@ extern const PinConfig          pwm_sync_con2_pin;  /* PC5  — boards 2+3 */
 extern const RS485_Config       rs485_cfg;
 extern RS485_Handle             rs485_handle;
 
+/* mightyZAP 12Lf Linear Servo — UART8 + RS-485
+ *   TX   : PE1  (Pin 171, UART8_TX, AF8) → DI on RS-485 transceiver
+ *   RX   : PE0  (Pin 170, UART8_RX, AF8) → RO on RS-485 transceiver
+ *   DE/RE: PD15 (Pin 98, GPIO) → NOT gate → DE+RE (inverted)
+ *   Baud : 57600 (mightyZAP default)                                         */
+
 /* USB2517I strapping pins */
 extern const PinConfig          usb2517_reset_n_pin;    /* PC13 — Pin 9  */
 extern const PinConfig          usb2517_cfg_sel1_pin;   /* PG1 — Pin 66 */

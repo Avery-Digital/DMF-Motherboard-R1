@@ -43,6 +43,7 @@
 #include "DC_Uart_Driver.h"
 #include "Act_Uart_Driver.h"
 #include "RS485_Driver.h"
+#include "MightyZap.h"
 #include <string.h>
 #include "stm32h7xx_ll_rtc.h"
 #include "stm32h7xx_ll_tim.h"
@@ -75,6 +76,7 @@ DcListRequest    dc_list_request    = {0};
 
 /* Gantry RS485 request — deferred to main loop */
 GantryRequest    gantry_request     = {0};
+ServoRawRequest  servo_raw_request  = {0};
 
 /* Measure ADC request — switch-controlled deterministic ADC measurement */
 MeasureAdcRequest measure_adc_request = {0};
@@ -219,6 +221,12 @@ int main(void)
             if (gantry_request.pending) {
                 gantry_request.pending = false;
                 Command_ExecuteGantry();
+            }
+
+            /* Forward raw bytes to mightyZAP servo via UART8 RS485 */
+            if (servo_raw_request.pending) {
+                servo_raw_request.pending = false;
+                Command_ExecuteServoRaw();
             }
 
             /* Execute switch-controlled ADC measurement — synchronous, blocking */
@@ -367,6 +375,12 @@ static void SystemInit_Sequence(void)
      *          9600 baud, polled TX/RX, half-duplex direction on PF8. */
     if (RS485_Init(&rs485_handle) != INIT_OK) {
         Error_Handler(0x70);
+    }
+
+    /* Step 7b: mightyZAP linear servo — UART8 + RS-485 on PE0/PE1/PD15
+     *          57600 baud, polled TX/RX, half-duplex direction on PD15. */
+    if (MightyZap_Init(&mzap_handle) != MZAP_OK) {
+        Error_Handler(0x71);
     }
 
     /* Step 8: Protocol parser — register the packet callback */
@@ -1402,6 +1416,7 @@ void Command_ExecuteSweepADC(void)
     /* volatile so the debugger-inspection writes aren't optimized out and
      * GCC doesn't raise -Wunused-but-set-variable. */
     static volatile uint32_t burst_raw[ADC_BURST_COUNT];
+    (void)burst_raw;
 
     for (uint16_t g = 0U; g < num_groups; g++) {
         const uint8_t *group = &sw_data[g * group_size];

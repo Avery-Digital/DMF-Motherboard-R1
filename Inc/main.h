@@ -153,7 +153,19 @@ typedef struct {
 
 extern GantryRequest    gantry_request;
 
+/* =================== Servo Raw RS485 Request =============================== */
+
+typedef struct {
+    volatile bool   pending;
+    uint8_t         msg1, msg2, cmd1, cmd2;
+    uint8_t         data[256];
+    uint16_t        length;
+} ServoRawRequest;
+
+extern ServoRawRequest  servo_raw_request;
+
 void Command_ExecuteGantry(void);
+void Command_ExecuteServoRaw(void);
 void PWM_SyncPulse(void);
 
 #define DC_LIST_MODE_SET    1U      /**< SET_LIST_OF_SW (5-byte groups)      */

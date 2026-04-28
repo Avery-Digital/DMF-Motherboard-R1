@@ -27,8 +27,11 @@
 #include <string.h>
 #include "Thermistor.h"
 #include "RS485_Driver.h"
+#include "MightyZap.h"
+#include "ll_tick.h"
 #include "TEC_PWM.h"
 #include "DRV8702.h"
+#include "DAC80508.h"
 
 /* Private handler prototypes ------------------------------------------------*/
 static void Command_HandlePing(USART_Handle *handle,
@@ -76,6 +79,9 @@ static void Command_HandleGantry(USART_Handle *handle,
                                   const PacketHeader *header,
                                   const uint8_t *payload);
 
+static void Command_HandleServoRaw(const PacketHeader *header,
+                                    const uint8_t *payload);
+
 static void Command_HandleActForward(const PacketHeader *header,
                                       const uint8_t *payload);
 
@@ -100,6 +106,15 @@ static void Command_HandleTecStopAll(const PacketHeader *header);
 
 static void Command_HandleTecReset(const PacketHeader *header,
                                     const uint8_t *payload);
+
+static void Command_HandleTecStatus(const PacketHeader *header,
+                                     const uint8_t *payload);
+
+static void Command_HandleTecInit(const PacketHeader *header,
+                                   const uint8_t *payload);
+
+static void Command_HandleTecSetVref(const PacketHeader *header,
+                                      const uint8_t *payload);
 
 /* ==========================================================================
  *  COMMAND DISPATCH
@@ -167,6 +182,18 @@ void Command_Dispatch(USART_Handle *handle,
         break;
     case CMD_TEC_RESET:
         Command_HandleTecReset(header, payload);
+        break;
+
+    case CMD_TEC_STATUS:
+        Command_HandleTecStatus(header, payload);
+        break;
+
+    case CMD_TEC_INIT:
+        Command_HandleTecInit(header, payload);
+        break;
+
+    case CMD_TEC_SET_VREF:
+        Command_HandleTecSetVref(header, payload);
         break;
 
     /* ---- Load Switch Commands (0x0C10–0x0C19) ---- */
@@ -256,6 +283,11 @@ void Command_Dispatch(USART_Handle *handle,
     /* ---- Gantry RS485 Passthrough (0x0C30) ---- */
     case CMD_GANTRY_CMD:
         Command_HandleGantry(handle, header, payload);
+        break;
+
+    /* ---- mightyZAP Servo Raw Forward (0x0C31) ---- */
+    case CMD_SERVO_RAW:
+        Command_HandleServoRaw(header, payload);
         break;
 
     /* ---- Driverboard Debug Command (0xBEEF) ---- */
@@ -803,6 +835,224 @@ reply:
 }
 
 /* ==========================================================================
+ *  CMD_TEC_STATUS (0x0C55) — Read DRV8702 SPI registers
+ *
+ *  Payload: [tec_id (1-3)]
+ *  Response: [s1][s2][tec_id][faulted][ic_stat_hi][ic_stat_lo]
+ *            [vgs_stat_hi][vgs_stat_lo][ic_ctrl_hi][ic_ctrl_lo]
+ *            [drive_ctrl_hi][drive_ctrl_lo]
+ * ========================================================================== */
+static void Command_HandleTecStatus(const PacketHeader *header,
+                                     const uint8_t *payload)
+{
+    uint8_t r[12] = {0};
+    r[0] = STATUS_CAT_OK;
+    r[1] = STATUS_CODE_OK;
+
+    if (header->length < 1U || payload == NULL) {
+        r[0] = STATUS_CAT_GENERAL;
+        r[1] = STATUS_PAYLOAD_SHORT;
+        tx_request.msg1    = header->msg1;
+        tx_request.msg2    = header->msg2;
+        tx_request.cmd1    = header->cmd1;
+        tx_request.cmd2    = header->cmd2;
+        memcpy(tx_request.payload, r, 2U);
+        tx_request.length  = 2U;
+        tx_request.pending = true;
+        return;
+    }
+
+    uint8_t tec_id = payload[0];
+    r[2] = tec_id;
+
+    DRV8702_Handle *drv = NULL;
+    switch (tec_id) {
+    case 1: drv = &drv8702_1_handle; break;
+    case 2: drv = &drv8702_2_handle; break;
+    case 3: drv = &drv8702_3_handle; break;
+    }
+
+    if (drv != NULL && drv->initialised) {
+        /* nFAULT pin */
+        r[3] = DRV8702_IsFaulted(drv) ? 0x01U : 0x00U;
+
+        /* Read SPI registers */
+        uint16_t ic_stat = 0, vgs_stat = 0, ic_ctrl = 0, drive_ctrl = 0;
+        DRV8702_ReadReg(drv, DRV8702_REG_IC_STAT, &ic_stat);
+        DRV8702_ReadReg(drv, DRV8702_REG_VGS_STAT, &vgs_stat);
+        DRV8702_ReadReg(drv, DRV8702_REG_IC_CTRL, &ic_ctrl);
+        DRV8702_ReadReg(drv, DRV8702_REG_DRIVE_CTRL, &drive_ctrl);
+
+        r[4]  = (uint8_t)(ic_stat >> 8);
+        r[5]  = (uint8_t)(ic_stat & 0xFF);
+        r[6]  = (uint8_t)(vgs_stat >> 8);
+        r[7]  = (uint8_t)(vgs_stat & 0xFF);
+        r[8]  = (uint8_t)(ic_ctrl >> 8);
+        r[9]  = (uint8_t)(ic_ctrl & 0xFF);
+        r[10] = (uint8_t)(drive_ctrl >> 8);
+        r[11] = (uint8_t)(drive_ctrl & 0xFF);
+    } else {
+        r[0] = STATUS_CAT_GENERAL;
+        r[1] = STATUS_UNKNOWN_CMD;
+    }
+
+    tx_request.msg1    = header->msg1;
+    tx_request.msg2    = header->msg2;
+    tx_request.cmd1    = header->cmd1;
+    tx_request.cmd2    = header->cmd2;
+    memcpy(tx_request.payload, r, sizeof(r));
+    tx_request.length  = sizeof(r);
+    tx_request.pending = true;
+}
+
+/* ==========================================================================
+ *  CMD_TEC_INIT (0x0C56) — Initialize TEC subsystem
+ *
+ *  Sets VREF via DAC channel for the specified TEC to the default 3A
+ *  chopping current, wakes the DRV8703, clears faults.
+ *
+ *  Payload: [tec_id (1-3)]
+ *  Response: [s1][s2][tec_id][dac_channel][vref_hi][vref_lo]
+ *
+ *  DAC channel mapping: TEC1=DAC0, TEC2=DAC1, TEC3=DAC0
+ *  (TEC3 uses DAC0 per board wiring)
+ *
+ *  VREF calculation for 3A with R_SENSE=0.015, AV=19.8:
+ *    VREF = (3.0 * 19.8 * 0.015) + 0.05 = 0.941V
+ *    DAC code = (0.941 / 4.096) * 65535 = 15053 = 0x3ACD
+ * ========================================================================== */
+#define TEC_DEFAULT_VREF_CODE   0x3ACDU   /* 0.941V on 4.096V ref = 3A chop */
+
+static void Command_HandleTecInit(const PacketHeader *header,
+                                   const uint8_t *payload)
+{
+    uint8_t r[6] = { STATUS_CAT_OK, STATUS_CODE_OK, 0, 0, 0, 0 };
+
+    if (header->length < 1U || payload == NULL) {
+        r[0] = STATUS_CAT_GENERAL;
+        r[1] = STATUS_PAYLOAD_SHORT;
+        goto reply;
+    }
+
+    uint8_t tec_id = payload[0];
+    r[2] = tec_id;
+
+    if (tec_id < 1U || tec_id > TEC_COUNT) {
+        r[0] = STATUS_CAT_GENERAL;
+        r[1] = STATUS_PAYLOAD_SHORT;
+        goto reply;
+    }
+
+    /* DAC channel mapping */
+    uint8_t dac_ch;
+    switch (tec_id) {
+    case 1: dac_ch = 0U; break;
+    case 2: dac_ch = 1U; break;
+    case 3: dac_ch = 0U; break;  /* TEC3 VREF → DAC0 per board wiring */
+    default: dac_ch = 0U; break;
+    }
+    r[3] = dac_ch;
+
+    /* Set VREF via DAC */
+    uint16_t vref_code = TEC_DEFAULT_VREF_CODE;
+    DAC80508_Status dac_st = DAC80508_SetChannel(&dac80508_handle, dac_ch, vref_code);
+    if (dac_st != DAC80508_OK) {
+        r[0] = STATUS_CAT_ADC;
+        r[1] = STATUS_ADS_READ_FAIL;
+        goto reply;
+    }
+
+    r[4] = (uint8_t)(vref_code >> 8);
+    r[5] = (uint8_t)(vref_code & 0xFF);
+
+    /* Wake DRV8703 and clear faults */
+    DRV8702_Handle *drv = NULL;
+    switch (tec_id) {
+    case 1: drv = &drv8702_1_handle; break;
+    case 2: drv = &drv8702_2_handle; break;
+    case 3: drv = &drv8702_3_handle; break;
+    }
+
+    if (drv != NULL) {
+        DRV8702_Wake(drv);
+        DRV8702_ClearFaults(drv);
+    }
+
+reply:
+    tx_request.msg1    = header->msg1;
+    tx_request.msg2    = header->msg2;
+    tx_request.cmd1    = header->cmd1;
+    tx_request.cmd2    = header->cmd2;
+    memcpy(tx_request.payload, r, sizeof(r));
+    tx_request.length  = sizeof(r);
+    tx_request.pending = true;
+}
+
+/* ==========================================================================
+ *  CMD_TEC_SET_VREF (0x0C57) — Manually set VREF DAC code
+ *
+ *  Payload: [tec_id (1-3)] [dac_code_hi] [dac_code_lo]
+ *  Response: [s1][s2][tec_id][vref_hi][vref_lo][voltage_mv_hi][voltage_mv_lo]
+ *
+ *  voltage_mv = (dac_code / 65535) * 4096
+ * ========================================================================== */
+static void Command_HandleTecSetVref(const PacketHeader *header,
+                                      const uint8_t *payload)
+{
+    uint8_t r[7] = { STATUS_CAT_OK, STATUS_CODE_OK, 0, 0, 0, 0, 0 };
+
+    if (header->length < 3U || payload == NULL) {
+        r[0] = STATUS_CAT_GENERAL;
+        r[1] = STATUS_PAYLOAD_SHORT;
+        goto reply;
+    }
+
+    uint8_t tec_id = payload[0];
+    uint16_t dac_code = ((uint16_t)payload[1] << 8) | payload[2];
+    r[2] = tec_id;
+
+    if (tec_id < 1U || tec_id > TEC_COUNT) {
+        r[0] = STATUS_CAT_GENERAL;
+        r[1] = STATUS_PAYLOAD_SHORT;
+        goto reply;
+    }
+
+    /* DAC channel mapping */
+    uint8_t dac_ch;
+    switch (tec_id) {
+    case 1: dac_ch = 0U; break;
+    case 2: dac_ch = 1U; break;
+    case 3: dac_ch = 0U; break;
+    default: dac_ch = 0U; break;
+    }
+
+    /* Set DAC */
+    DAC80508_Status dac_st = DAC80508_SetChannel(&dac80508_handle, dac_ch, dac_code);
+    if (dac_st != DAC80508_OK) {
+        r[0] = STATUS_CAT_ADC;
+        r[1] = STATUS_ADS_READ_FAIL;
+        goto reply;
+    }
+
+    r[3] = (uint8_t)(dac_code >> 8);
+    r[4] = (uint8_t)(dac_code & 0xFF);
+
+    /* Calculate voltage in mV: (dac_code / 65535) * 4096 * 1000 */
+    uint32_t mv = ((uint32_t)dac_code * 4096U) / 65535U;
+    r[5] = (uint8_t)(mv >> 8);
+    r[6] = (uint8_t)(mv & 0xFF);
+
+reply:
+    tx_request.msg1    = header->msg1;
+    tx_request.msg2    = header->msg2;
+    tx_request.cmd1    = header->cmd1;
+    tx_request.cmd2    = header->cmd2;
+    memcpy(tx_request.payload, r, sizeof(r));
+    tx_request.length  = sizeof(r);
+    tx_request.pending = true;
+}
+
+/* ==========================================================================
  *  CMD_GET_BOARD_TYPE (0x0C99) — ISR context
  *
  *  Returns a fixed identifier so the host can distinguish the motherboard
@@ -972,6 +1222,139 @@ void Command_ExecuteGantry(void)
         memcpy(&tx_request.payload[2], response, len);
         tx_request.length = 2U + len;
     }
+    tx_request.pending = true;
+}
+
+/* ==========================================================================
+ *  CMD_SERVO_RAW (0x0C31) — Forward raw bytes to mightyZAP via UART8
+ *
+ *  The GUI sends pre-framed mightyZAP packets (with header, checksum).
+ *  This handler forwards the raw bytes over UART8 RS-485 and returns
+ *  whatever the servo sends back.
+ *
+ *  Payload in:  [raw bytes to send to servo]
+ *  Response:    [s1][s2][raw bytes received from servo]
+ * ========================================================================== */
+static void Command_HandleServoRaw(const PacketHeader *header,
+                                    const uint8_t *payload)
+{
+    if (header->length == 0U || payload == NULL) {
+        if (!tx_request.pending) {
+            tx_request.msg1 = header->msg1;
+            tx_request.msg2 = header->msg2;
+            tx_request.cmd1 = header->cmd1;
+            tx_request.cmd2 = header->cmd2;
+            tx_request.payload[0] = STATUS_CAT_GENERAL;
+            tx_request.payload[1] = STATUS_PAYLOAD_SHORT;
+            tx_request.length = 2U;
+            tx_request.pending = true;
+        }
+        return;
+    }
+
+    if (servo_raw_request.pending) return;
+
+    servo_raw_request.msg1 = header->msg1;
+    servo_raw_request.msg2 = header->msg2;
+    servo_raw_request.cmd1 = header->cmd1;
+    servo_raw_request.cmd2 = header->cmd2;
+
+    uint16_t len = header->length;
+    if (len > sizeof(servo_raw_request.data)) len = sizeof(servo_raw_request.data);
+    memcpy(servo_raw_request.data, payload, len);
+    servo_raw_request.length = len;
+    servo_raw_request.pending = true;
+}
+
+/* ==========================================================================
+ *  Command_ExecuteServoRaw — main loop context
+ *
+ *  Forwards raw bytes to mightyZAP via UART8 RS-485 and collects response.
+ * ========================================================================== */
+void Command_ExecuteServoRaw(void)
+{
+    USART_TypeDef *usart = mzap_handle.cfg->usart;
+    const MightyZap_Config *cfg = mzap_handle.cfg;
+
+    /* Flush stale RX */
+    while (LL_USART_IsActiveFlag_RXNE_RXFNE(usart)) {
+        (void)LL_USART_ReceiveData8(usart);
+    }
+
+    /* Switch to transmit */
+    LL_GPIO_ResetOutputPin(cfg->de_re_pin.port, cfg->de_re_pin.pin);
+
+    /* Send all raw bytes */
+    for (uint16_t i = 0U; i < servo_raw_request.length; i++) {
+        uint32_t t0 = LL_GetTick();
+        while (!LL_USART_IsActiveFlag_TXE_TXFNF(usart)) {
+            if ((LL_GetTick() - t0) >= MZAP_TIMEOUT_MS) goto fail;
+        }
+        LL_USART_TransmitData8(usart, servo_raw_request.data[i]);
+    }
+
+    /* Wait for TX complete */
+    {
+        uint32_t t0 = LL_GetTick();
+        while (!LL_USART_IsActiveFlag_TC(usart)) {
+            if ((LL_GetTick() - t0) >= MZAP_TIMEOUT_MS) goto fail;
+        }
+        LL_USART_ClearFlag_TC(usart);
+    }
+
+    /* Turnaround delay */
+    for (volatile uint32_t d = 0; d < 1200; d++) { __NOP(); }
+
+    /* Switch to receive */
+    LL_GPIO_SetOutputPin(cfg->de_re_pin.port, cfg->de_re_pin.pin);
+
+    /* Clear error flags from half-duplex echo */
+    if (LL_USART_IsActiveFlag_ORE(usart)) LL_USART_ClearFlag_ORE(usart);
+    if (LL_USART_IsActiveFlag_FE(usart))  LL_USART_ClearFlag_FE(usart);
+    if (LL_USART_IsActiveFlag_NE(usart))  LL_USART_ClearFlag_NE(usart);
+
+    /* Flush echo */
+    while (LL_USART_IsActiveFlag_RXNE_RXFNE(usart)) {
+        (void)LL_USART_ReceiveData8(usart);
+    }
+
+    /* Read response — collect bytes until timeout */
+    {
+        uint16_t count = 0U;
+        uint32_t t0 = LL_GetTick();
+        uint32_t last_byte_time = t0;
+
+        while (count < (PKT_MAX_PAYLOAD - 2U)) {
+            if ((LL_GetTick() - t0) >= MZAP_TIMEOUT_MS) break;
+            if (count > 0U && (LL_GetTick() - last_byte_time) >= 5U) break;
+
+            if (LL_USART_IsActiveFlag_RXNE_RXFNE(usart)) {
+                tx_request.payload[2U + count] = LL_USART_ReceiveData8(usart);
+                count++;
+                last_byte_time = LL_GetTick();
+            }
+        }
+
+        tx_request.msg1 = servo_raw_request.msg1;
+        tx_request.msg2 = servo_raw_request.msg2;
+        tx_request.cmd1 = servo_raw_request.cmd1;
+        tx_request.cmd2 = servo_raw_request.cmd2;
+        tx_request.payload[0] = STATUS_CAT_OK;
+        tx_request.payload[1] = STATUS_CODE_OK;
+        tx_request.length = 2U + count;
+        tx_request.pending = true;
+    }
+    return;
+
+fail:
+    LL_GPIO_SetOutputPin(cfg->de_re_pin.port, cfg->de_re_pin.pin);
+    tx_request.msg1 = servo_raw_request.msg1;
+    tx_request.msg2 = servo_raw_request.msg2;
+    tx_request.cmd1 = servo_raw_request.cmd1;
+    tx_request.cmd2 = servo_raw_request.cmd2;
+    tx_request.payload[0] = STATUS_CAT_GANTRY;
+    tx_request.payload[1] = STATUS_GANTRY_TIMEOUT;
+    tx_request.length = 2U;
     tx_request.pending = true;
 }
 

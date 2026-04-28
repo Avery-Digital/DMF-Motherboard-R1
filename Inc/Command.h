@@ -89,6 +89,7 @@ extern "C" {
  *  Deferred to main loop (RS485 is polled, ~50 ms round trip at 9600).
  */
 #define CMD_GANTRY_CMD      CMD_CODE(0x0C, 0x30)    /**< Gantry RS485 passthrough */
+#define CMD_SERVO_RAW       CMD_CODE(0x0C, 0x31)    /**< mightyZAP RS485 raw fwd  */
 
 /* ---- Load Switch Current Sense Commands (0x0C40–0x0C49) ----
  *
@@ -133,6 +134,9 @@ extern "C" {
 #define CMD_TEC_STOP        CMD_CODE(0x0C, 0x52)    /**< Stop single TEC         */
 #define CMD_TEC_STOP_ALL    CMD_CODE(0x0C, 0x53)    /**< Stop all TECs           */
 #define CMD_TEC_RESET       CMD_CODE(0x0C, 0x54)    /**< Reset TEC (sleep/wake)  */
+#define CMD_TEC_STATUS      CMD_CODE(0x0C, 0x55)    /**< Read DRV8702 SPI status */
+#define CMD_TEC_INIT        CMD_CODE(0x0C, 0x56)    /**< Init TEC: set VREF DAC  */
+#define CMD_TEC_SET_VREF    CMD_CODE(0x0C, 0x57)    /**< Set VREF DAC raw code   */
 
 #define GANTRY_RESPONSE_MAX  128U   /**< Max ASCII response bytes from gantry */
 #define GANTRY_TIMEOUT_MS    500U   /**< RS485 response timeout               */

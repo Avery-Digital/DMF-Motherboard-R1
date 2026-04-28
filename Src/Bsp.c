@@ -1447,6 +1447,63 @@ RS485_Handle rs485_handle = {
 };
 
 /* ==========================================================================
+ *  MIGHTYZAP 12Lf LINEAR SERVO — UART8 + RS-485
+ *
+ *  TX   : PE1  (Pin 171, UART8_TX, AF8)
+ *  RX   : PE0  (Pin 170, UART8_RX, AF8)
+ *  DE/RE: PD15 (Pin 98, GPIO, inverted via NOT gate)
+ *  Baud : 57600 (mightyZAP factory default)
+ *  Kernel clock: PLL2Q = 128 MHz
+ * ========================================================================== */
+
+#include "MightyZap.h"
+
+const MightyZap_Config mzap_cfg = {
+    .tx_pin = {
+        .clk    = LL_AHB4_GRP1_PERIPH_GPIOE,
+        .port   = GPIOE,
+        .pin    = LL_GPIO_PIN_1,
+        .mode   = LL_GPIO_MODE_ALTERNATE,
+        .af     = LL_GPIO_AF_8,
+        .speed  = LL_GPIO_SPEED_FREQ_VERY_HIGH,
+        .pull   = LL_GPIO_PULL_NO,
+        .output = LL_GPIO_OUTPUT_PUSHPULL,
+    },
+    .rx_pin = {
+        .clk    = LL_AHB4_GRP1_PERIPH_GPIOE,
+        .port   = GPIOE,
+        .pin    = LL_GPIO_PIN_0,
+        .mode   = LL_GPIO_MODE_ALTERNATE,
+        .af     = LL_GPIO_AF_8,
+        .speed  = LL_GPIO_SPEED_FREQ_VERY_HIGH,
+        .pull   = LL_GPIO_PULL_UP,
+        .output = LL_GPIO_OUTPUT_PUSHPULL,
+    },
+    .de_re_pin = {
+        .clk    = LL_AHB4_GRP1_PERIPH_GPIOD,
+        .port   = GPIOD,
+        .pin    = LL_GPIO_PIN_15,
+        .mode   = LL_GPIO_MODE_OUTPUT,
+        .af     = 0U,
+        .speed  = LL_GPIO_SPEED_FREQ_HIGH,
+        .pull   = LL_GPIO_PULL_NO,
+        .output = LL_GPIO_OUTPUT_PUSHPULL,
+    },
+    .usart          = UART8,
+    .bus_clk_enable = LL_APB1_GRP1_PERIPH_UART8,
+    .kernel_clk_src = LL_RCC_USART234578_CLKSOURCE_PLL2Q,
+    .kernel_clk_hz  = 128000000UL,
+    .baudrate       = 57600U,
+};
+
+MightyZap_Handle mzap_handle = {
+    .cfg          = &mzap_cfg,
+    .initialised  = false,
+    .servo_id     = 0U,     /* Factory default ID */
+    .last_error   = 0U,
+};
+
+/* ==========================================================================
  *  GPIO PIN INITIALIZATION
  *
  *  Generic single-pin init from a PinConfig struct.
