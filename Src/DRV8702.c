@@ -272,7 +272,8 @@ DRV8702_Status DRV8702_TEC_Heat(DRV8702_Handle *handle)
         return DRV8702_ERR_FAULT;
     }
 
-    DRV8702_SetDirection(handle, DRV8702_DIR_FORWARD);
+    /* Reversed: FORWARD was cooling the top plate, REVERSE heats it */
+    DRV8702_SetDirection(handle, DRV8702_DIR_REVERSE);
     DRV8702_Enable(handle);
 
     return DRV8702_OK;
@@ -288,7 +289,8 @@ DRV8702_Status DRV8702_TEC_Cool(DRV8702_Handle *handle)
         return DRV8702_ERR_FAULT;
     }
 
-    DRV8702_SetDirection(handle, DRV8702_DIR_REVERSE);
+    /* Reversed: REVERSE was heating the top plate, FORWARD cools it */
+    DRV8702_SetDirection(handle, DRV8702_DIR_FORWARD);
     DRV8702_Enable(handle);
 
     return DRV8702_OK;

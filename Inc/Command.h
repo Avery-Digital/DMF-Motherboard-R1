@@ -137,6 +137,10 @@ extern "C" {
 #define CMD_TEC_STATUS      CMD_CODE(0x0C, 0x55)    /**< Read DRV8702 SPI status */
 #define CMD_TEC_INIT        CMD_CODE(0x0C, 0x56)    /**< Init TEC: set VREF DAC  */
 #define CMD_TEC_SET_VREF    CMD_CODE(0x0C, 0x57)    /**< Set VREF DAC raw code   */
+#define CMD_TEC_PID_START   CMD_CODE(0x0C, 0x58)    /**< Start PID loop          */
+#define CMD_TEC_PID_STOP    CMD_CODE(0x0C, 0x59)    /**< Stop PID loop           */
+#define CMD_TEC_PID_GAINS   CMD_CODE(0x0C, 0x5A)    /**< Set PID Kp/Ki/Kd        */
+#define CMD_TEC_PID_STATUS  CMD_CODE(0x0C, 0x5B)    /**< Get PID state/telemetry */
 
 #define GANTRY_RESPONSE_MAX  128U   /**< Max ASCII response bytes from gantry */
 #define GANTRY_TIMEOUT_MS    500U   /**< RS485 response timeout               */
