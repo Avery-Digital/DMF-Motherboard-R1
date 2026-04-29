@@ -45,6 +45,10 @@ static DRV8702_Status DRV8702_SPITransfer(const DRV8702_Config *cfg,
     SPI_TypeDef *spi = cfg->spi;
     uint32_t t0;
 
+    /* ---- Guard SPI2 against ISR contention ---- */
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+
     /* ---- Reconfigure SPI for 16-bit transfers ---- */
     LL_SPI_Disable(spi);
     LL_SPI_SetDataWidth(spi, LL_SPI_DATAWIDTH_16BIT);
@@ -72,6 +76,7 @@ static DRV8702_Status DRV8702_SPITransfer(const DRV8702_Config *cfg,
             LL_SPI_Disable(spi);
             LL_SPI_SetDataWidth(spi, LL_SPI_DATAWIDTH_32BIT);
             LL_SPI_Enable(spi);
+            __set_PRIMASK(primask);
             return DRV8702_ERR_TIMEOUT;
         }
     }
@@ -90,6 +95,7 @@ static DRV8702_Status DRV8702_SPITransfer(const DRV8702_Config *cfg,
     LL_SPI_SetDataWidth(spi, LL_SPI_DATAWIDTH_32BIT);
     LL_SPI_Enable(spi);
 
+    __set_PRIMASK(primask);
     return DRV8702_OK;
 }
 
@@ -272,8 +278,7 @@ DRV8702_Status DRV8702_TEC_Heat(DRV8702_Handle *handle)
         return DRV8702_ERR_FAULT;
     }
 
-    /* Reversed: FORWARD was cooling the top plate, REVERSE heats it */
-    DRV8702_SetDirection(handle, DRV8702_DIR_REVERSE);
+    DRV8702_SetDirection(handle, DRV8702_DIR_FORWARD);
     DRV8702_Enable(handle);
 
     return DRV8702_OK;
@@ -289,8 +294,7 @@ DRV8702_Status DRV8702_TEC_Cool(DRV8702_Handle *handle)
         return DRV8702_ERR_FAULT;
     }
 
-    /* Reversed: REVERSE was heating the top plate, FORWARD cools it */
-    DRV8702_SetDirection(handle, DRV8702_DIR_FORWARD);
+    DRV8702_SetDirection(handle, DRV8702_DIR_REVERSE);
     DRV8702_Enable(handle);
 
     return DRV8702_OK;

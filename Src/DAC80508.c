@@ -42,6 +42,10 @@ static DAC80508_Status DAC80508_SPITransfer(const DAC80508_Config *cfg,
     SPI_TypeDef *spi = cfg->spi;
     uint32_t t0;
 
+    /* ---- Guard SPI2 against ISR contention ---- */
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+
     /* ---- Reconfigure SPI for 24-bit Mode 1 ---- */
     LL_SPI_Disable(spi);
     LL_SPI_SetDataWidth(spi, LL_SPI_DATAWIDTH_24BIT);
@@ -74,6 +78,7 @@ static DAC80508_Status DAC80508_SPITransfer(const DAC80508_Config *cfg,
             LL_SPI_SetClockPhase(spi, LL_SPI_PHASE_1EDGE);
             LL_SPI_SetFIFOThreshold(spi, LL_SPI_FIFO_TH_01DATA);
             LL_SPI_Enable(spi);
+            __set_PRIMASK(primask);
             return DAC80508_ERR_TIMEOUT;
         }
     }
@@ -94,6 +99,7 @@ static DAC80508_Status DAC80508_SPITransfer(const DAC80508_Config *cfg,
     LL_SPI_SetFIFOThreshold(spi, LL_SPI_FIFO_TH_01DATA);
     LL_SPI_Enable(spi);
 
+    __set_PRIMASK(primask);
     return DAC80508_OK;
 }
 

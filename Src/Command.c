@@ -945,7 +945,7 @@ static void Command_HandleTecStatus(const PacketHeader *header,
  *    VREF = (3.0 * 19.8 * 0.015) + 0.05 = 0.941V
  *    DAC code = (0.941 / 4.096) * 65535 = 15053 = 0x3ACD
  * ========================================================================== */
-#define TEC_DEFAULT_VREF_CODE   0x3ACDU   /* 0.941V on 4.096V ref = 3A chop */
+#define TEC_DEFAULT_VREF_CODE   0xFFFFU   /* Max VREF = 4.096V (no current chop limit) */
 
 static void Command_HandleTecInit(const PacketHeader *header,
                                    const uint8_t *payload)
@@ -1193,12 +1193,12 @@ static void Command_HandleTecPidStatus(const PacketHeader *header)
     r[7] = (uint8_t)(tec_pid.setpoint_c100 >> 8);
     r[8] = (uint8_t)(tec_pid.setpoint_c100 & 0xFF);
     r[9] = (uint8_t)tec_pid.output;
-    r[10] = (uint8_t)(tec_pid.kp >> 8);
-    r[11] = (uint8_t)(tec_pid.kp & 0xFF);
-    r[12] = (uint8_t)(tec_pid.ki >> 8);
-    r[13] = (uint8_t)(tec_pid.ki & 0xFF);
-    r[14] = (uint8_t)(tec_pid.kd >> 8);
-    r[15] = (uint8_t)(tec_pid.kd & 0xFF);
+    r[10] = (uint8_t)(tec_pid.kp_heat >> 8);
+    r[11] = (uint8_t)(tec_pid.kp_heat & 0xFF);
+    r[12] = (uint8_t)(tec_pid.ki_heat >> 8);
+    r[13] = (uint8_t)(tec_pid.ki_heat & 0xFF);
+    r[14] = (uint8_t)(tec_pid.kd_heat >> 8);
+    r[15] = (uint8_t)(tec_pid.kd_heat & 0xFF);
     r[16] = 0U;  /* reserved */
 
     tx_request.msg1   = header->msg1;

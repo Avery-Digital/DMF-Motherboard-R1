@@ -58,10 +58,15 @@ typedef struct {
 /* ======================== PID State ======================================= */
 
 typedef struct {
-    /* Gains (scaled: actual = value / 100.0) */
-    int32_t     kp;             /**< Proportional gain × 100             */
-    int32_t     ki;             /**< Integral gain × 100                 */
-    int32_t     kd;             /**< Derivative gain × 100               */
+    /* Heating gains — used when error > 0 (need to heat) */
+    int32_t     kp_heat;        /**< Proportional gain × 100             */
+    int32_t     ki_heat;        /**< Integral gain × 100                 */
+    int32_t     kd_heat;        /**< Derivative gain × 100               */
+
+    /* Cooling gains — used when error < 0 (need to cool) */
+    int32_t     kp_cool;        /**< Proportional gain × 100             */
+    int32_t     ki_cool;        /**< Integral gain × 100                 */
+    int32_t     kd_cool;        /**< Derivative gain × 100               */
 
     /* Setpoint and limits */
     int16_t     setpoint_c100;  /**< Target temp in °C × 100             */

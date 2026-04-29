@@ -149,10 +149,10 @@ TEC_PWM_Status TEC_PWM_Set(uint8_t instance, TEC_Direction dir, uint8_t duty_pct
 
     switch (dir) {
     case TEC_DIR_HEAT:
-        DRV8702_SetDirection(drv, DRV8702_DIR_FORWARD);
+        DRV8702_SetDirection(drv, DRV8702_DIR_REVERSE);   /* Reversed to match TEC wiring */
         break;
     case TEC_DIR_COOL:
-        DRV8702_SetDirection(drv, DRV8702_DIR_REVERSE);
+        DRV8702_SetDirection(drv, DRV8702_DIR_FORWARD);   /* Reversed to match TEC wiring */
         break;
     case TEC_DIR_OFF:
     default:

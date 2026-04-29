@@ -115,6 +115,10 @@ SPI_Status SPI_LTC2338_Read(SPI_Handle *handle, uint32_t *result_out)
     const SPI_Config *cfg = handle->cfg;
     uint32_t t0;
 
+    /* ---- Guard SPI2 against ISR contention ---- */
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+
     /* ------------------------------------------------------------------
      *  Step 1: Pulse CNV HIGH to start conversion.
      *
@@ -146,6 +150,7 @@ SPI_Status SPI_LTC2338_Read(SPI_Handle *handle, uint32_t *result_out)
         {
             handle->busy  = false;
             handle->error = SPI_ERR_TIMEOUT;
+            __set_PRIMASK(primask);
             return SPI_ERR_TIMEOUT;
         }
     }
@@ -186,6 +191,7 @@ SPI_Status SPI_LTC2338_Read(SPI_Handle *handle, uint32_t *result_out)
         if ((_tick_ms() - t0) >= cfg->xfer_timeout_ms) {
             handle->busy  = false;
             handle->error = SPI_ERR_TIMEOUT;
+            __set_PRIMASK(primask);
             return SPI_ERR_TIMEOUT;
         }
     }
@@ -196,6 +202,7 @@ SPI_Status SPI_LTC2338_Read(SPI_Handle *handle, uint32_t *result_out)
         LL_SPI_ClearFlag_OVR(cfg->peripheral);
         handle->busy  = false;
         handle->error = SPI_ERR_OVERRUN;
+        __set_PRIMASK(primask);
         return SPI_ERR_OVERRUN;
     }
 
@@ -210,6 +217,7 @@ SPI_Status SPI_LTC2338_Read(SPI_Handle *handle, uint32_t *result_out)
     *result_out = (raw >> 14U) & 0x0003FFFFUL;
 
     handle->busy = false;
+    __set_PRIMASK(primask);
     return SPI_OK;
 }
 
