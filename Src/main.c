@@ -44,6 +44,7 @@
 #include "Act_Uart_Driver.h"
 #include "RS485_Driver.h"
 #include "MightyZap.h"
+#include "TEC_PID.h"
 #include <string.h>
 #include "stm32h7xx_ll_rtc.h"
 #include "stm32h7xx_ll_tim.h"
@@ -247,7 +248,13 @@ int main(void)
                 Command_ExecuteDcList();
             }
 
-            /* Consume pending TX outside of ISR context */
+            /* TEC PID update — polled at 10 Hz (100 ms period).
+             * Returns immediately if period hasn't elapsed. */
+            if (tec_pid.running) {
+                TEC_PID_Update(&tec_pid);
+            }
+
+            /* Consume pending TX outside of ISR context (HIGHEST PRIORITY) */
             if (tx_request.pending) {
                 tx_request.pending = false;
                 USART_Driver_SendPacket(&usart10_handle,
@@ -257,6 +264,28 @@ int main(void)
                                         tx_request.cmd2,
                                         tx_request.payload,
                                         tx_request.length);
+            }
+            /* PID telemetry auto-stream (LOWER PRIORITY — only when bus is free).
+             * Skips gracefully if a command response is pending. */
+            else if (pid_telemetry.pending) {
+                pid_telemetry.pending = false;
+                USART_Driver_SendPacket(&usart10_handle,
+                                        0x01, 0x02,     /* msg1, msg2 (telemetry) */
+                                        0x0C, 0x5B,     /* CMD_TEC_PID_STATUS     */
+                                        (const uint8_t[]){
+                                            STATUS_CAT_OK, STATUS_CODE_OK,
+                                            pid_telemetry.tec_id,
+                                            pid_telemetry.running  ? 0x01U : 0x00U,
+                                            pid_telemetry.faulted  ? 0x01U : 0x00U,
+                                            (uint8_t)(pid_telemetry.measured_c100 >> 8),
+                                            (uint8_t)(pid_telemetry.measured_c100 & 0xFF),
+                                            (uint8_t)(pid_telemetry.setpoint_c100 >> 8),
+                                            (uint8_t)(pid_telemetry.setpoint_c100 & 0xFF),
+                                            (uint8_t)pid_telemetry.output,
+                                            (uint8_t)(pid_telemetry.error_c100 >> 8),
+                                            (uint8_t)(pid_telemetry.error_c100 & 0xFF),
+                                        },
+                                        12U);
             }
         }
 }
@@ -382,6 +411,9 @@ static void SystemInit_Sequence(void)
     if (MightyZap_Init(&mzap_handle) != MZAP_OK) {
         Error_Handler(0x71);
     }
+
+    /* Step 7c: TEC PID controller — initialize state (not running yet) */
+    TEC_PID_Init(&tec_pid);
 
     /* Step 8: Protocol parser — register the packet callback */
     Protocol_ParserInit(&usart10_parser, OnPacketReceived, NULL);

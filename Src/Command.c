@@ -32,6 +32,7 @@
 #include "TEC_PWM.h"
 #include "DRV8702.h"
 #include "DAC80508.h"
+#include "TEC_PID.h"
 
 /* Private handler prototypes ------------------------------------------------*/
 static void Command_HandlePing(USART_Handle *handle,
@@ -116,6 +117,13 @@ static void Command_HandleTecInit(const PacketHeader *header,
 static void Command_HandleTecSetVref(const PacketHeader *header,
                                       const uint8_t *payload);
 
+static void Command_HandleTecPidStart(const PacketHeader *header,
+                                       const uint8_t *payload);
+static void Command_HandleTecPidStop(const PacketHeader *header);
+static void Command_HandleTecPidGains(const PacketHeader *header,
+                                       const uint8_t *payload);
+static void Command_HandleTecPidStatus(const PacketHeader *header);
+
 /* ==========================================================================
  *  COMMAND DISPATCH
  *
@@ -194,6 +202,22 @@ void Command_Dispatch(USART_Handle *handle,
 
     case CMD_TEC_SET_VREF:
         Command_HandleTecSetVref(header, payload);
+        break;
+
+    case CMD_TEC_PID_START:
+        Command_HandleTecPidStart(header, payload);
+        break;
+
+    case CMD_TEC_PID_STOP:
+        Command_HandleTecPidStop(header);
+        break;
+
+    case CMD_TEC_PID_GAINS:
+        Command_HandleTecPidGains(header, payload);
+        break;
+
+    case CMD_TEC_PID_STATUS:
+        Command_HandleTecPidStatus(header);
         break;
 
     /* ---- Load Switch Commands (0x0C10–0x0C19) ---- */
@@ -1049,6 +1073,140 @@ reply:
     tx_request.cmd2    = header->cmd2;
     memcpy(tx_request.payload, r, sizeof(r));
     tx_request.length  = sizeof(r);
+    tx_request.pending = true;
+}
+
+/* ==========================================================================
+ *  CMD_TEC_PID_START (0x0C58)
+ *  Payload: [tec_id][setpoint_hi][setpoint_lo] (°C × 100, big-endian)
+ *  Response: [s1][s2][tec_id]
+ * ========================================================================== */
+static void Command_HandleTecPidStart(const PacketHeader *header,
+                                       const uint8_t *payload)
+{
+    uint8_t r[3] = { STATUS_CAT_OK, STATUS_CODE_OK, 0 };
+
+    if (header->length < 3U || payload == NULL) {
+        r[0] = STATUS_CAT_GENERAL;
+        r[1] = STATUS_PAYLOAD_SHORT;
+        goto reply;
+    }
+
+    uint8_t tec_id = payload[0];
+    int16_t setpoint = (int16_t)((payload[1] << 8) | payload[2]);
+    r[2] = tec_id;
+
+    TEC_PID_Status st = TEC_PID_Start(&tec_pid, tec_id, setpoint);
+    if (st != TEC_PID_OK) {
+        r[0] = STATUS_CAT_GENERAL;
+        r[1] = STATUS_PAYLOAD_SHORT;
+    }
+
+reply:
+    tx_request.msg1   = header->msg1;
+    tx_request.msg2   = header->msg2;
+    tx_request.cmd1   = header->cmd1;
+    tx_request.cmd2   = header->cmd2;
+    memcpy(tx_request.payload, r, sizeof(r));
+    tx_request.length = sizeof(r);
+    tx_request.pending = true;
+}
+
+/* ==========================================================================
+ *  CMD_TEC_PID_STOP (0x0C59)
+ *  Response: [s1][s2]
+ * ========================================================================== */
+static void Command_HandleTecPidStop(const PacketHeader *header)
+{
+    TEC_PID_Stop(&tec_pid);
+
+    tx_request.msg1   = header->msg1;
+    tx_request.msg2   = header->msg2;
+    tx_request.cmd1   = header->cmd1;
+    tx_request.cmd2   = header->cmd2;
+    tx_request.payload[0] = STATUS_CAT_OK;
+    tx_request.payload[1] = STATUS_CODE_OK;
+    tx_request.length = 2U;
+    tx_request.pending = true;
+}
+
+/* ==========================================================================
+ *  CMD_TEC_PID_GAINS (0x0C5A)
+ *  Payload: [kp_hi][kp_lo][ki_hi][ki_lo][kd_hi][kd_lo] (int16 BE, × 100)
+ *  Response: [s1][s2][kp_hi][kp_lo][ki_hi][ki_lo][kd_hi][kd_lo]
+ * ========================================================================== */
+static void Command_HandleTecPidGains(const PacketHeader *header,
+                                       const uint8_t *payload)
+{
+    uint8_t r[8] = { STATUS_CAT_OK, STATUS_CODE_OK, 0,0,0,0,0,0 };
+
+    if (header->length < 6U || payload == NULL) {
+        r[0] = STATUS_CAT_GENERAL;
+        r[1] = STATUS_PAYLOAD_SHORT;
+        tx_request.msg1   = header->msg1;
+        tx_request.msg2   = header->msg2;
+        tx_request.cmd1   = header->cmd1;
+        tx_request.cmd2   = header->cmd2;
+        memcpy(tx_request.payload, r, 2U);
+        tx_request.length = 2U;
+        tx_request.pending = true;
+        return;
+    }
+
+    int16_t kp = (int16_t)((payload[0] << 8) | payload[1]);
+    int16_t ki = (int16_t)((payload[2] << 8) | payload[3]);
+    int16_t kd = (int16_t)((payload[4] << 8) | payload[5]);
+
+    TEC_PID_SetGains(&tec_pid, kp, ki, kd);
+
+    r[2] = payload[0]; r[3] = payload[1];
+    r[4] = payload[2]; r[5] = payload[3];
+    r[6] = payload[4]; r[7] = payload[5];
+
+    tx_request.msg1   = header->msg1;
+    tx_request.msg2   = header->msg2;
+    tx_request.cmd1   = header->cmd1;
+    tx_request.cmd2   = header->cmd2;
+    memcpy(tx_request.payload, r, sizeof(r));
+    tx_request.length = sizeof(r);
+    tx_request.pending = true;
+}
+
+/* ==========================================================================
+ *  CMD_TEC_PID_STATUS (0x0C5B)
+ *  Response: [s1][s2][tec_id][running][faulted]
+ *            [measured_hi][measured_lo][setpoint_hi][setpoint_lo]
+ *            [output_i8]
+ *            [kp_hi][kp_lo][ki_hi][ki_lo][kd_hi][kd_lo]
+ *  Total: 17 bytes
+ * ========================================================================== */
+static void Command_HandleTecPidStatus(const PacketHeader *header)
+{
+    uint8_t r[17];
+    r[0] = STATUS_CAT_OK;
+    r[1] = STATUS_CODE_OK;
+    r[2] = tec_pid.tec_id;
+    r[3] = tec_pid.running ? 0x01U : 0x00U;
+    r[4] = tec_pid.faulted ? 0x01U : 0x00U;
+    r[5] = (uint8_t)(tec_pid.measured_c100 >> 8);
+    r[6] = (uint8_t)(tec_pid.measured_c100 & 0xFF);
+    r[7] = (uint8_t)(tec_pid.setpoint_c100 >> 8);
+    r[8] = (uint8_t)(tec_pid.setpoint_c100 & 0xFF);
+    r[9] = (uint8_t)tec_pid.output;
+    r[10] = (uint8_t)(tec_pid.kp >> 8);
+    r[11] = (uint8_t)(tec_pid.kp & 0xFF);
+    r[12] = (uint8_t)(tec_pid.ki >> 8);
+    r[13] = (uint8_t)(tec_pid.ki & 0xFF);
+    r[14] = (uint8_t)(tec_pid.kd >> 8);
+    r[15] = (uint8_t)(tec_pid.kd & 0xFF);
+    r[16] = 0U;  /* reserved */
+
+    tx_request.msg1   = header->msg1;
+    tx_request.msg2   = header->msg2;
+    tx_request.cmd1   = header->cmd1;
+    tx_request.cmd2   = header->cmd2;
+    memcpy(tx_request.payload, r, sizeof(r));
+    tx_request.length = sizeof(r);
     tx_request.pending = true;
 }
 

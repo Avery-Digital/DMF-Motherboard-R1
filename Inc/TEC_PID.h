@@ -3,21 +3,16 @@
  * @author  Cam
  * @brief   TEC PID Temperature Controller
  *
- *          Closed-loop temperature control for the TEC subsystem.
- *          Runs a periodic PID loop on a hardware timer interrupt,
- *          reads THERM6 (top plate) and adjusts DRV8703 PWM duty.
+ *          Closed-loop temperature control for PCR thermal cycling (4–95°C).
+ *          Polled from main loop at 10 Hz. Reads THERM6 (top plate),
+ *          computes PID, drives TEC via TEC_PWM_Set().
  *
  *          Bidirectional: positive output = heat, negative = cool.
- *          Setpoint is in degrees C × 100 (integer, 0.01°C resolution).
+ *          Auto-streams telemetry via PID_Telemetry struct (main loop
+ *          sends when TX bus is free — never blocks command responses).
  *
- *          Control loop:
- *            1. Read THERM6 ADC → convert to °C
- *            2. Calculate error = setpoint - measured
- *            3. PID: output = Kp*e + Ki*integral + Kd*derivative
- *            4. Clamp output to ±100 (duty cycle)
- *            5. If output > 0 → heat at |output|% duty
- *               If output < 0 → cool at |output|% duty
- *               If output ≈ 0 → brake (stop)
+ *          Safety: stops TEC immediately on sensor fault (NaN or out of
+ *          range -10 to 120°C).
  *******************************************************************************
  * Copyright (c) 2026
  * All rights reserved.
@@ -32,6 +27,12 @@ extern "C" {
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <math.h>
+
+/* ======================== Safety Limits ==================================== */
+
+#define PID_TEMP_MIN_C100    (-1000)    /* -10.00°C — below this = fault      */
+#define PID_TEMP_MAX_C100    (12000)    /*  120.00°C — above this = fault     */
 
 /* ======================== Status ========================================== */
 
@@ -40,6 +41,19 @@ typedef enum {
     TEC_PID_ERR_PARAM   = 0x01U,
     TEC_PID_ERR_SENSOR  = 0x02U,
 } TEC_PID_Status;
+
+/* ======================== Telemetry (staged for main loop TX) ============= */
+
+typedef struct {
+    volatile bool   pending;        /**< Set by PID update, cleared by main loop */
+    int16_t         measured_c100;  /**< Current temperature × 100               */
+    int16_t         setpoint_c100;  /**< Target temperature × 100                */
+    int16_t         error_c100;     /**< Error = setpoint - measured              */
+    int8_t          output;         /**< PID output -100 to +100                 */
+    uint8_t         tec_id;         /**< TEC instance                            */
+    bool            faulted;        /**< Sensor fault occurred                   */
+    bool            running;        /**< PID is active                           */
+} PID_Telemetry;
 
 /* ======================== PID State ======================================= */
 
@@ -51,7 +65,7 @@ typedef struct {
 
     /* Setpoint and limits */
     int16_t     setpoint_c100;  /**< Target temp in °C × 100             */
-    int16_t     integral_max;   /**< Anti-windup clamp for integral term  */
+    int32_t     integral_max;   /**< Anti-windup clamp for integral term  */
 
     /* Internal state */
     int32_t     integral;       /**< Accumulated integral                */
@@ -61,60 +75,25 @@ typedef struct {
 
     /* Control */
     bool        running;        /**< PID loop is active                  */
+    bool        faulted;        /**< Sensor fault — requires restart     */
     uint8_t     tec_id;         /**< Which TEC to control (1-3)          */
     uint32_t    period_ms;      /**< Control loop period in ms           */
     uint32_t    last_tick;      /**< Tick of last PID execution          */
 } TEC_PID_State;
 
-/* ======================== Extern Instance ================================== */
+/* ======================== Extern Instances ================================= */
 
-extern TEC_PID_State tec_pid;
+extern TEC_PID_State  tec_pid;
+extern PID_Telemetry  pid_telemetry;
 
 /* ======================== Public API ======================================== */
 
-/**
- * @brief  Initialize PID state with default gains.
- */
-void TEC_PID_Init(TEC_PID_State *pid);
-
-/**
- * @brief  Start the PID loop for the specified TEC.
- * @param  tec_id       TEC instance (1-3)
- * @param  setpoint_c100  Target temperature in °C × 100 (e.g., 9500 = 95.00°C)
- */
+void           TEC_PID_Init(TEC_PID_State *pid);
 TEC_PID_Status TEC_PID_Start(TEC_PID_State *pid, uint8_t tec_id, int16_t setpoint_c100);
-
-/**
- * @brief  Stop the PID loop and turn off the TEC.
- */
-void TEC_PID_Stop(TEC_PID_State *pid);
-
-/**
- * @brief  Set PID gains.
- * @param  kp, ki, kd  Gains × 100 (e.g., kp=500 means Kp=5.00)
- */
-void TEC_PID_SetGains(TEC_PID_State *pid, int32_t kp, int32_t ki, int32_t kd);
-
-/**
- * @brief  Update setpoint while running.
- */
-void TEC_PID_SetTarget(TEC_PID_State *pid, int16_t setpoint_c100);
-
-/**
- * @brief  Execute one PID iteration. Call this from the main loop.
- *         Returns immediately if the period hasn't elapsed.
- *         Reads thermistor, computes PID, sets TEC duty/direction.
- */
+void           TEC_PID_Stop(TEC_PID_State *pid);
+void           TEC_PID_SetGains(TEC_PID_State *pid, int32_t kp, int32_t ki, int32_t kd);
+void           TEC_PID_SetTarget(TEC_PID_State *pid, int16_t setpoint_c100);
 TEC_PID_Status TEC_PID_Update(TEC_PID_State *pid);
-
-/**
- * @brief  Get current PID state for telemetry.
- */
-void TEC_PID_GetState(const TEC_PID_State *pid,
-                       int16_t *measured_c100,
-                       int16_t *setpoint_c100,
-                       int8_t *output,
-                       bool *running);
 
 #ifdef __cplusplus
 }
